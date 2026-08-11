@@ -214,6 +214,15 @@ These were wrong in v0.11.0 and earlier.
   claims to document. Revisit this only if the project gains real
   external adopters who need one; until then, this CHANGELOG is the
   record of what changed and why.
+- The per-release `AUDIT_vX.Y.Z.md` file. Only `AUDIT_v0.11.0.md` was
+  ever produced under that name; no version before it had one, and this
+  release does not restart the pattern. A single instance was never a
+  convention to begin with - the same one-instance-becomes-a-rule
+  mistake Convention #14 exists to catch elsewhere, applied here to
+  documentation instead of code. This CHANGELOG entry is the record of
+  what was verified for a given release and why; a second in-repo
+  document restating the same information would duplicate it without
+  telling a reader anything they could not already find here.
 
 ### Compatibility
 - Two breaking changes, both listed above: the `should_notify_emergency`
