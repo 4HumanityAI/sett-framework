@@ -18,9 +18,14 @@ Wearable sensors feed the health data.
 The EnvironmentalContext is read from UniversalMemory.
 """
 from __future__ import annotations
+
+import math
+import unicodedata
 from typing import Any, TYPE_CHECKING
 from dataclasses import dataclass
 from datetime import datetime, timezone
+
+from sett.exceptions import SETTValidationError
 
 if TYPE_CHECKING:
     from sett.risk_ruler.risk_profile import RiskProfile
@@ -54,6 +59,80 @@ class SafetyAssessment:
             object.__setattr__(self, field_name, max(0.0, min(10.0, float(value))))
 
 
+def canonicalize_for_keyword_match(text: str) -> str:
+    """Put ``text`` in the one spelling this analyzer matches keywords against.
+
+    Three steps, in this order:
+
+    1. Drop every character of Unicode category ``Cf`` (format characters:
+       zero-width space, zero-width joiner, soft hyphen, the bidi
+       overrides). They are invisible, so ``"ha\\u200brm"`` reads as
+       ``harm`` to a human while ``"harm" in text`` answers False.
+    2. Normalize to ``NFKC``, which folds compatibility forms - fullwidth
+       ``ｄｅｌｅｔｅ``, the ligature ``ﬁ``, superscripts - onto their
+       ordinary spellings.
+    3. ``casefold()`` rather than ``lower()``, which is the case-insensitive
+       comparison Unicode actually defines.
+
+    What this does NOT do, stated plainly rather than left to be
+    discovered: it does not defeat homoglyphs. Cyrillic ``а`` (U+0430) is
+    a different letter from Latin ``a``, not a different spelling of it,
+    and NFKC correctly leaves it alone. ``"hаrm"`` written that way still
+    misses the keyword. A homoglyph table is not the answer either -
+    every hand-maintained one is incomplete, and an incomplete one
+    produces confidence instead of safety.
+
+    The answer is that this matcher is not where a critical action is
+    decided; see ``ContextAnalyzer`` for what is.
+    """
+    without_format_chars = "".join(
+        ch for ch in text if unicodedata.category(ch) != "Cf"
+    )
+    return unicodedata.normalize("NFKC", without_format_chars).casefold()
+
+
+def _validated_risk_score(score: object) -> float:
+    """Reject a harm score that cannot be compared against a threshold.
+
+    Every verdict in SETT comes from comparing this number against the
+    ruleset's thresholds, and Python answers ``float("nan") >= anything``
+    with ``False``. A single non-finite score therefore clears the reject
+    threshold *and* the warn threshold and arrives at ALLOW - a fail-open
+    in the one layer this framework exists to make fail-closed. An
+    analyzer can produce one without any bad intent: a division by a
+    count that turned out to be zero, a model returning an unexpected
+    value, a corrupt input.
+
+    Validated here rather than in ``EthicalFilter`` because this is the
+    one type every analyzer must return, so it is the only chokepoint
+    that cannot be bypassed by a custom analyzer - and validating in both
+    places would create two rules that have to agree, which is the drift
+    this project has already had to remove once.
+
+    No upper bound is imposed: the scale belongs to the ruleset, whose
+    thresholds an application configures, and inventing a ceiling here
+    would silently cap scores that a stricter ruleset means to act on.
+    """
+    if isinstance(score, bool) or not isinstance(score, (int, float)):
+        raise SETTValidationError(
+            "ContextAnalysis.risk_score must be a real number, got "
+            f"{type(score).__name__}. A harm score that cannot be compared "
+            "against a threshold cannot produce a verdict."
+        )
+    if not math.isfinite(score):
+        raise SETTValidationError(
+            "ContextAnalysis.risk_score must be finite. A NaN or infinite "
+            "score compares False against every threshold, which would "
+            "reach ALLOW without any rule having allowed it."
+        )
+    if score < 0:
+        raise SETTValidationError(
+            "ContextAnalysis.risk_score must not be negative; harm is "
+            "measured from zero upward."
+        )
+    return float(score)
+
+
 class ContextAnalysis:
     """Result of a full three-layer context analysis."""
 
@@ -68,8 +147,9 @@ class ContextAnalysis:
         risk_level: "RiskLevel | None" = None,
         safety_assessment: SafetyAssessment | None = None,
     ) -> None:
+        """Hold one analysis; refuses a risk_score no threshold can compare."""
         self.action = action
-        self.risk_score = risk_score
+        self.risk_score = _validated_risk_score(risk_score)
         self.emotional_state = emotional_state
         self.reasoning = reasoning
         self.consequences = consequences
@@ -100,6 +180,32 @@ class ContextAnalyzer:
     - The SentimentAnalyzerAgent (emotional state + RiskProfile)
     - Wearable biometric data (health indicators)
     - UniversalMemory (EnvironmentalContext for the user's location)
+
+    What this generic analyzer is, and is not
+    -----------------------------------------
+    Layer 1 here is a keyword heuristic. It exists so that an application
+    that has registered no analyzer of its own still gets a non-zero,
+    roughly-right score instead of silence - the same fail-honest
+    scaffolding idea as ``StubDomainAgent``. It is a floor, not a policy.
+
+    It is deliberately not the thing standing between a critical action
+    and its effect. Three other things are, and they are structural
+    rather than textual:
+
+    - ``SETTExecutor`` resolves a handler by exact ``action_type`` and
+      fails closed when there is no exact match, so an action type this
+      matcher failed to recognise has no handler to reach either.
+    - A domain analyzer registered with ``register_analyzer()`` decides
+      from the structured fields of its own domain, not from prose.
+    - The ruleset's thresholds and the audit trail are what a deployment
+      actually tunes and reviews.
+
+    Text arriving here is canonicalized first (see
+    ``canonicalize_for_keyword_match``), which closes the invisible and
+    compatibility-form spellings. It does not close homoglyphs, and no
+    keyword list can. An operation whose consequences you would not
+    accept being under-scored needs a domain analyzer, which is the
+    supported way to say so.
     """
 
     # Emotional state → base risk modifier
@@ -148,7 +254,7 @@ class ContextAnalyzer:
 
         # ── Layer 2: User emotional state modifier ───────────────────────────
         emotional_modifier = self.EMOTIONAL_RISK_MODIFIERS.get(
-            emotional_state.lower(), 0.5
+            canonicalize_for_keyword_match(emotional_state), 0.5
         )
 
         # ── Layer 2: RiskProfile modifier ────────────────────────────────────
@@ -204,7 +310,12 @@ class ContextAnalyzer:
         )
 
     def _base_risk_score(self, action: str, context: dict[str, Any]) -> float:
-        """Layer 1: keyword-based base risk from the action itself."""
+        """Layer 1: keyword-based base risk from the action itself.
+
+        A fallback heuristic, not a policy: see the class docstring for
+        what actually guards a critical action. Everything matched here
+        goes through ``canonicalize_for_keyword_match`` first.
+        """
         score = 0.0
         # A governed universal-memory write may describe the real proposed
         # operation in an explicit field. Inspect only those structured fields,
@@ -215,7 +326,7 @@ class ContextAnalyzer:
             value = context.get(key)
             if isinstance(value, str):
                 action_parts.append(value)
-        action_lower = " ".join(action_parts).lower()
+        action_lower = canonicalize_for_keyword_match(" ".join(action_parts))
 
         high_risk_kw = [
             "emergency", "danger", "harm", "delete", "send_all",
@@ -247,7 +358,7 @@ class ContextAnalyzer:
         Determines if a human is in immediate risk.
         Combines score threshold, biometrics, RiskProfile, and EnvironmentalContext.
 
-        [Unreleased]: biometric parsing (nested "health" dict vs. flat
+        Since v0.11.0: biometric parsing (nested "health" dict vs. flat
         context, vital-sign thresholds) moved to
         biometric_ruler.BiometricReading: this method no longer reads
         context["health"]/context["heart_rate_bpm"] itself. Behavior is
@@ -285,7 +396,7 @@ class ContextAnalyzer:
     ) -> list[str]:
         """Build a list of possible consequences for this action."""
         consequences = []
-        action_lower = action.lower()
+        action_lower = canonicalize_for_keyword_match(action)
 
         if "send" in action_lower:
             consequences.append("Information will be transmitted to an external party.")

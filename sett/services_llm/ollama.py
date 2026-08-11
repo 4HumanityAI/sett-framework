@@ -26,12 +26,60 @@ OllamaAdapter changes zero lines anywhere else in your system.
 """
 from __future__ import annotations
 import json
-import urllib.request
 import urllib.error
+import urllib.parse
+import urllib.request
 from typing import Any
 
+from sett.core_ruler.lifecycle import (
+    pop_lifecycle_kwargs,
+    validate_duration_seconds,
+)
 from sett.services_llm.base import LLMBase
-from sett.exceptions import SETTLLMAdapterError
+from sett.exceptions import SETTError, SETTLLMAdapterError
+
+
+def _validated_base_url(base_url: str) -> str:
+    """
+    Accept only an absolute ``http``/``https`` URL that names a host.
+
+    A wrong ``base_url`` is a configuration mistake, not a request that
+    failed, so it is refused here rather than on the first completion.
+    Refusing it late is worse than it sounds: the first completion is
+    often reached through a fallback path (see ``PhrasingExpert``), and a
+    URL error raised there arrives as a bare ``ValueError`` from urllib -
+    a type nobody downstream is watching for.
+
+    Returns the URL with any trailing slash removed, ready to have a path
+    appended.
+    """
+    if not isinstance(base_url, str) or not base_url.strip():
+        raise SETTLLMAdapterError(
+            "Ollama base_url must be a non-empty string, for example "
+            f"'{OllamaAdapter.DEFAULT_BASE_URL}'."
+        )
+
+    trimmed = base_url.strip().rstrip("/")
+    try:
+        parts = urllib.parse.urlsplit(trimmed)
+        # Read on purpose and discarded: urllib parses the port only when
+        # asked, so this is what turns a bad one into an error here
+        # instead of on the first request.
+        parts.port
+    except ValueError as e:
+        # urllib reports these as plain ValueError: 'Invalid IPv6 URL',
+        # 'Port could not be cast to integer value'.
+        raise SETTLLMAdapterError(
+            f"Ollama base_url {base_url!r} is not a valid URL: {e}"
+        ) from e
+
+    if parts.scheme not in ("http", "https") or not parts.netloc:
+        raise SETTLLMAdapterError(
+            f"Ollama base_url {base_url!r} must be an absolute http(s) URL "
+            f"including the host, for example "
+            f"'{OllamaAdapter.DEFAULT_BASE_URL}'."
+        )
+    return trimmed
 
 
 class OllamaAdapter(LLMBase):
@@ -49,6 +97,11 @@ class OllamaAdapter(LLMBase):
         2. Pull a model:   ollama pull qwen3:1.7b
         3. Make sure Ollama is running (it usually starts automatically
            as a background service after installation).
+
+    Raises:
+        SETTLLMAdapterError: at construction, when ``base_url`` is not an
+            absolute http(s) URL naming a host; and from ``complete()`` /
+            ``chat()`` for every way the request itself can fail.
     """
 
     DEFAULT_MODEL = "qwen3:1.7b"
@@ -69,23 +122,30 @@ class OllamaAdapter(LLMBase):
                    locally: run `ollama pull <model>` first).
             base_url: Where Ollama's local server is listening. Default
                       is correct for almost everyone; only change this
-                      if you moved Ollama to a different port/host.
+                      if you moved Ollama to a different port/host. Must
+                      be an absolute http(s) URL naming a host; anything
+                      else is refused here rather than on the first call.
             temperature: Sampling temperature (0.0 to 1.0).
             timeout_seconds: How long to wait for a response before
                 giving up. Local CPU inference can be slow: raise this
                 if you see timeouts on a low-resource machine.
         """
         self._model = model
-        self._base_url = base_url.rstrip("/")
+        self._base_url = _validated_base_url(base_url)
         self._temperature = min(1.0, max(0.0, temperature))
-        self._timeout_seconds = timeout_seconds
+        self._timeout_seconds = validate_duration_seconds(
+            timeout_seconds, name="timeout_seconds"
+        )
 
     @property
     def model_name(self) -> str:
+        """The Ollama model tag this adapter calls."""
         return self._model
 
     def complete(self, prompt: str, system: str = "", **kwargs: Any) -> str:
         """One-shot completion: no conversation history."""
+        lifecycle = pop_lifecycle_kwargs(kwargs)
+        lifecycle.throw_if_cancelled()
         payload: dict[str, Any] = {
             "model": self._model,
             "prompt": prompt,
@@ -95,7 +155,12 @@ class OllamaAdapter(LLMBase):
         if system:
             payload["system"] = system
 
-        data = self._post("/api/generate", payload)
+        data = self._post(
+            "/api/generate",
+            payload,
+            timeout=lifecycle.effective_timeout(self._timeout_seconds),
+        )
+        lifecycle.throw_if_cancelled()
         return data.get("response", "")
 
     def chat(
@@ -105,6 +170,8 @@ class OllamaAdapter(LLMBase):
         **kwargs: Any,
     ) -> str:
         """Multi-turn conversation completion."""
+        lifecycle = pop_lifecycle_kwargs(kwargs)
+        lifecycle.throw_if_cancelled()
         full_messages = []
         if system:
             full_messages.append({"role": "system", "content": system})
@@ -117,22 +184,54 @@ class OllamaAdapter(LLMBase):
             "options": {"temperature": kwargs.get("temperature", self._temperature)},
         }
 
-        data = self._post("/api/chat", payload)
+        data = self._post(
+            "/api/chat",
+            payload,
+            timeout=lifecycle.effective_timeout(self._timeout_seconds),
+        )
+        lifecycle.throw_if_cancelled()
         return data.get("message", {}).get("content", "")
 
-    def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def _post(
+        self,
+        path: str,
+        payload: dict[str, Any],
+        *,
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
         """
         POST JSON to the local Ollama server using only the standard
         library: no extra pip dependency required for this adapter.
+
+        ``timeout`` is the effective one - the shorter of this adapter's
+        own setting and whatever time the surrounding run has left - so a
+        local inference call cannot outlive the turn that asked for it.
+
+        Every way this can fail leaves as ``SETTLLMAdapterError``, which
+        is the adapter contract callers depend on (``PhrasingExpert``
+        falls back to plain text on exactly that type). The frequent
+        failures are named individually because their messages say what
+        to do about them; the final clause exists because enumerating
+        urllib's failure modes has already proven incomplete - a
+        malformed URL surfaces as ``ValueError`` and a host with a space
+        in it as ``http.client.InvalidURL``, neither of which is a
+        ``URLError``. SETT exceptions pass through untouched so that a
+        cancellation or a deadline keeps its own type and is not reported
+        as a provider failure.
         """
-        url = f"{self._base_url}{path}"
-        body = json.dumps(payload).encode("utf-8")
-        request = urllib.request.Request(
-            url, data=body, headers={"Content-Type": "application/json"}
+        effective_timeout = (
+            self._timeout_seconds if timeout is None else timeout
         )
+        url = f"{self._base_url}{path}"
         try:
-            with urllib.request.urlopen(request, timeout=self._timeout_seconds) as resp:
+            body = json.dumps(payload).encode("utf-8")
+            request = urllib.request.Request(
+                url, data=body, headers={"Content-Type": "application/json"}
+            )
+            with urllib.request.urlopen(request, timeout=effective_timeout) as resp:
                 return json.loads(resp.read().decode("utf-8"))
+        except SETTError:
+            raise
         except urllib.error.URLError as e:
             raise SETTLLMAdapterError(
                 f"Could not reach Ollama at {self._base_url}. "
@@ -146,10 +245,15 @@ class OllamaAdapter(LLMBase):
             ) from e
         except TimeoutError as e:
             raise SETTLLMAdapterError(
-                f"Ollama did not respond within {self._timeout_seconds}s. "
+                f"Ollama did not respond within {effective_timeout}s. "
                 f"Local CPU inference can be slow on the first call (the "
                 f"model needs to load into memory): try again, or raise "
                 f"timeout_seconds if this keeps happening."
+            ) from e
+        except Exception as e:
+            raise SETTLLMAdapterError(
+                f"Ollama request to {url} failed: "
+                f"{type(e).__name__}: {e}"
             ) from e
 
     def __repr__(self) -> str:

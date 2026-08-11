@@ -13,8 +13,13 @@ import urllib.error
 import pytest
 from unittest.mock import patch, MagicMock
 
+from sett import PhrasingExpert
 from sett.services_llm.ollama import OllamaAdapter
-from sett.exceptions import SETTLLMAdapterError
+from sett.exceptions import (
+    SETTCancelledError,
+    SETTLLMAdapterError,
+    SETTTimeoutError,
+)
 
 
 def _fake_response(payload: dict) -> MagicMock:
@@ -181,3 +186,141 @@ class TestOllamaAdapterErrorHandling:
                 pass
             except Exception as e:
                 pytest.fail(f"Leaked non-SETT exception type: {type(e)}")
+
+
+class TestOllamaAdapterBaseUrlValidation:
+    """
+    AUD4-ROB-02: a wrong base_url used to surface as a bare ValueError
+    from urllib on the first completion, walking straight through the
+    SETTLLMAdapterError protection every caller relies on. It is a
+    configuration mistake, so it is refused at construction.
+    """
+
+    @pytest.mark.parametrize(
+        "base_url",
+        [
+            "not-a-url",           # urllib: "unknown url type"
+            "http://[::1",         # urllib: "Invalid IPv6 URL"
+            "http://localhost:abc",  # urllib: port not an integer
+            "//localhost:11434",   # no scheme
+            "ftp://localhost",     # scheme this adapter does not speak
+            "http://",             # scheme but no host
+            "",
+            "   ",
+        ],
+    )
+    def test_invalid_base_url_is_refused_at_construction(self, base_url):
+        with pytest.raises(SETTLLMAdapterError) as exc_info:
+            OllamaAdapter(base_url=base_url)
+        assert "base_url" in str(exc_info.value)
+
+    @pytest.mark.parametrize(
+        "base_url, expected",
+        [
+            ("http://localhost:11434", "http://localhost:11434"),
+            ("http://localhost:11434/", "http://localhost:11434"),
+            ("https://ollama.internal", "https://ollama.internal"),
+            ("http://[::1]:11434", "http://[::1]:11434"),
+            ("http://192.168.1.20:11434/", "http://192.168.1.20:11434"),
+            ("  http://localhost:11434  ", "http://localhost:11434"),
+        ],
+    )
+    def test_valid_base_url_is_accepted(self, base_url, expected):
+        assert OllamaAdapter(base_url=base_url)._base_url == expected
+
+    def test_construction_failure_happens_before_any_request(self):
+        with patch("urllib.request.urlopen") as mock_urlopen:
+            with pytest.raises(SETTLLMAdapterError):
+                OllamaAdapter(base_url="not-a-url")
+            mock_urlopen.assert_not_called()
+
+
+class TestOllamaAdapterTranslatesEveryFailure:
+    """
+    The named except clauses cover the frequent failures. This covers the
+    contract: whatever else the request raises still arrives as
+    SETTLLMAdapterError, because enumerating urllib's failure modes has
+    already proven incomplete once.
+    """
+
+    def test_host_with_a_space_does_not_leak_http_client_invalid_url(self):
+        """
+        Not a URLError and not a ValueError: http.client.InvalidURL,
+        raised before any socket is opened. Passes base_url validation
+        (it has a scheme and a host) and would have escaped the three
+        named clauses.
+        """
+        adapter = OllamaAdapter(base_url="http://local host:11434")
+        with pytest.raises(SETTLLMAdapterError):
+            adapter.complete("hello")
+
+    @pytest.mark.parametrize(
+        "raised",
+        [
+            ValueError("unknown url type"),
+            OSError("socket exploded"),
+            RuntimeError("something nobody enumerated"),
+            UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte"),
+        ],
+    )
+    def test_unenumerated_failures_become_adapter_errors(self, raised):
+        with patch("urllib.request.urlopen") as mock_urlopen:
+            mock_urlopen.side_effect = raised
+            adapter = OllamaAdapter()
+            with pytest.raises(SETTLLMAdapterError) as exc_info:
+                adapter.complete("hello")
+        assert exc_info.value.__cause__ is raised
+
+    @pytest.mark.parametrize("method", ["complete", "chat"])
+    def test_both_entry_points_translate(self, method):
+        with patch("urllib.request.urlopen") as mock_urlopen:
+            mock_urlopen.side_effect = RuntimeError("nope")
+            adapter = OllamaAdapter()
+            with pytest.raises(SETTLLMAdapterError):
+                if method == "complete":
+                    adapter.complete("hello")
+                else:
+                    adapter.chat([{"role": "user", "content": "hello"}])
+
+    @pytest.mark.parametrize(
+        "lifecycle_error",
+        [SETTCancelledError("stopped"), SETTTimeoutError("out of time")],
+    )
+    def test_lifecycle_exceptions_keep_their_type(self, lifecycle_error):
+        """
+        The catch-all must not turn "somebody asked for this to stop" into
+        "the provider failed": a caller distinguishing cancellation from
+        failure would silently lose that distinction.
+        """
+        with patch("urllib.request.urlopen") as mock_urlopen:
+            mock_urlopen.side_effect = lifecycle_error
+            adapter = OllamaAdapter()
+            with pytest.raises(type(lifecycle_error)):
+                adapter.complete("hello")
+
+
+class TestPhrasingExpertProtectionHolds:
+    """
+    The effect AUD4-ROB-02 actually reported: the fallback that keeps a
+    component answering with no model reachable was being bypassed.
+    """
+
+    def test_fallback_text_is_used_when_the_adapter_fails_unusually(self):
+        class Demo(PhrasingExpert):
+            OUTPUT_KEY = "greeting"
+
+            def determine_facts(self, context):
+                return {"time_of_day": "morning"}
+
+            def build_prompt(self, facts, context):
+                return "Greet the user."
+
+            def fallback_text(self, facts, context):
+                return "Good morning."
+
+        with patch("urllib.request.urlopen") as mock_urlopen:
+            mock_urlopen.side_effect = ValueError("unknown url type")
+            expert = Demo(name="demo", llm=OllamaAdapter())
+            result = expert.resolve({})
+
+        assert result["greeting"] == "Good morning."

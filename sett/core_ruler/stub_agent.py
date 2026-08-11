@@ -43,9 +43,11 @@ class StubDomainAgent(SETTAgent):
     """
 
     def __init__(self, domain: str, name: str | None = None) -> None:
+        """Stand in for the real agent of ``domain`` until one is registered."""
         super().__init__(name=name or f"Stub[{domain}]", domain=domain)
 
     def process(self, input_data: dict[str, Any]) -> dict[str, Any]:
+        """Echo the input back as a visibly stubbed result, and publish it."""
         result = {
             "status": "stub",
             "domain": self.domain,

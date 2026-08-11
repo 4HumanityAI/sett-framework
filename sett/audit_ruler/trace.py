@@ -12,26 +12,122 @@ from types import MappingProxyType
 from typing import Any
 from uuid import uuid4
 
-from sett.core_ruler.execution_context import ExecutionContext
+from sett.core_ruler.execution_context import ExecutionContext, is_sensitive_key
 from sett.exceptions import SETTConfigurationError, SETTValidationError
 
 _GENESIS_HASH = "0" * 64
 TraceExporter = Callable[[dict[str, Any]], None]
+
+# Which terminal kinds may close each instrumented start kind.
+#
+# Hoisted to module level in v0.12.0 for one specific reason: the set of
+# terminals that may close "trace.started" used to be written twice - once
+# here and once inline in the single-terminal check further down - and two
+# copies of a list that must agree is a list that eventually will not. Both
+# readers now derive from this one mapping, so adding a terminal cannot be
+# done for one check and forgotten for the other.
+#
+# v0.12.0 adds the cancelled/timed-out terminals at every level, the
+# partial terminal for pipelines, and the per-attempt pair used by the
+# controlled executor. Cancellation and deadline exhaustion get distinct
+# kinds everywhere rather than sharing one: a trace that cannot tell "the
+# user stopped this" from "this ran out of time" cannot answer the only
+# question anybody asks it afterwards.
+_TERMINAL_BY_START: dict[str, frozenset[str]] = {
+    "trace.started": frozenset(
+        {
+            "trace.completed",
+            "trace.failed",
+            "trace.cancelled",
+            "trace.timed_out",
+        }
+    ),
+    "pipeline.started": frozenset(
+        {
+            "pipeline.completed",
+            "pipeline.rejected",
+            "pipeline.failed",
+            "pipeline.cancelled",
+            "pipeline.timed_out",
+            "pipeline.partial",
+        }
+    ),
+    "pipeline.stage_started": frozenset(
+        {
+            "pipeline.stage_completed",
+            "pipeline.stage_rejected",
+            "pipeline.stage_skipped",
+            "pipeline.stage_failed",
+            "pipeline.stage_cancelled",
+            "pipeline.stage_timed_out",
+        }
+    ),
+    "broadcast.started": frozenset(
+        {
+            "broadcast.completed",
+            "broadcast.failed",
+            "broadcast.cancelled",
+            "broadcast.timed_out",
+        }
+    ),
+    "route.selected": frozenset(
+        {
+            "route.completed",
+            "route.failed",
+            "route.cancelled",
+            "route.timed_out",
+        }
+    ),
+    "agent.started": frozenset(
+        {
+            "agent.completed",
+            "agent.failed",
+            "agent.cancelled",
+            "agent.timed_out",
+        }
+    ),
+    "expert.started": frozenset(
+        {
+            "expert.completed",
+            "expert.failed",
+            "expert.cancelled",
+            "expert.timed_out",
+        }
+    ),
+    "handler.authorized": frozenset({"handler.started", "handler.blocked"}),
+    "handler.started": frozenset(
+        {
+            "handler.completed",
+            "handler.failed",
+            "handler.cancelled",
+            "handler.timed_out",
+        }
+    ),
+    "handler.attempt_started": frozenset(
+        {"handler.attempt_completed", "handler.attempt_failed"}
+    ),
+}
+
+TRACE_TERMINAL_KINDS: frozenset[str] = _TERMINAL_BY_START["trace.started"]
+"""Kinds that close a whole trace. Derived, never written out twice."""
+
+# Lifecycle events that are not start/terminal pairs: they annotate a run
+# rather than opening or closing a boundary, so they are listed here for
+# discoverability and to keep the vocabulary in one place instead of being
+# spelled out as string literals at each emitting site.
+CANCEL_REQUESTED_KIND = "execution.cancel_requested"
+DEADLINE_EXCEEDED_KIND = "execution.deadline_exceeded"
+CLEANUP_STARTED_KIND = "execution.cleanup_started"
+CLEANUP_COMPLETED_KIND = "execution.cleanup_completed"
+CLEANUP_FAILED_KIND = "execution.cleanup_failed"
 _MAX_ATTRIBUTE_KEYS = 32
 _MAX_ATTRIBUTE_DEPTH = 8
 _MAX_ATTRIBUTE_BYTES = 16 * 1024
-_SENSITIVE_FRAGMENTS = (
-    "password",
-    "secret",
-    "token",
-    "authorization",
-    "cookie",
-    "api_key",
-    "credential",
-    "medical",
-    "health_record",
-    "biometric",
-)
+# F17 fix (defensive audit #2): this used to be a second, independently
+# maintained copy of execution_context.py's own sensitive-key list, and
+# the two had already diverged (this one had "medical"/"health_record"/
+# "biometric", the other did not). Sensitivity now has exactly one
+# definition, imported from there.
 
 
 def _freeze_value(value: Any, depth: int = 0) -> Any:
@@ -54,8 +150,7 @@ def _freeze_value(value: Any, depth: int = 0) -> Any:
                 raise SETTValidationError(
                     "Trace attribute keys must be non-empty strings."
                 )
-            lowered = key.lower()
-            if any(fragment in lowered for fragment in _SENSITIVE_FRAGMENTS):
+            if is_sensitive_key(key):
                 raise SETTValidationError(
                     f"Trace attribute key {key!r} is sensitive and cannot "
                     "be recorded."
@@ -137,6 +232,7 @@ class TraceEvent:
     entry_hash: str
 
     def safe_view(self) -> dict[str, Any]:
+        """This event as a dict, with attribute values reduced to shape."""
         return {
             "event_id": self.event_id,
             "trace_id": self.trace_id,
@@ -160,11 +256,13 @@ class TraceRecorder:
     """Thread-safe in-memory recorder with hash and causal verification."""
 
     def __init__(self) -> None:
+        """Start an empty recorder with no exporters attached."""
         self._events: list[TraceEvent] = []
         self._exporters: list[TraceExporter] = []
         self._lock = threading.RLock()
 
     def register_exporter(self, exporter: TraceExporter) -> None:
+        """Add a sink called once per recorded event, best effort."""
         if not callable(exporter):
             raise SETTValidationError("Trace exporter must be callable.")
         with self._lock:
@@ -241,8 +339,28 @@ class TraceRecorder:
         return event
 
     def get_trace(self, trace_id: str) -> tuple[TraceEvent, ...]:
+        """Every event recorded under one trace, in recorded order."""
         with self._lock:
             return tuple(event for event in self._events if event.trace_id == trace_id)
+
+    def knows_event(self, event_id: str, *, trace_id: str | None = None) -> bool:
+        """Whether this recorder holds ``event_id``, optionally in one trace.
+
+        Exists so a caller can safely use an event id that reached it from
+        outside - a cancellation request carried on an exception, for
+        instance - as a ``cause_id``. Referencing an event this recorder
+        never saw, or one belonging to a different trace, is precisely what
+        ``verify()`` rejects, so the honest move is to check first and fall
+        back to a local cause rather than to record an unverifiable link.
+        """
+        if not event_id:
+            return False
+        with self._lock:
+            for event in reversed(self._events):
+                if event.event_id != event_id:
+                    continue
+                return trace_id is None or event.trace_id == trace_id
+        return False
 
     def last_event_id(self, run_id: str) -> str | None:
         """Return the latest event for one execution node."""
@@ -258,6 +376,7 @@ class TraceRecorder:
         *,
         view: str = "sanitized",
     ) -> tuple[dict[str, Any], ...]:
+        """One trace as dicts, in the 'summary' or 'sanitized' view."""
         if view not in {"summary", "sanitized"}:
             raise SETTValidationError("Trace view must be 'summary' or 'sanitized'.")
         events = self.get_trace(trace_id)
@@ -282,6 +401,27 @@ class TraceRecorder:
         )
 
     def verify(self, trace_id: str | None = None) -> bool:
+        """
+        Verify this recorder's hash chain and structural integrity.
+
+        The chain is global, over every event this recorder has ever
+        recorded - there is no separate chain per trace_id (F28,
+        defensive audit #2). Passing ``trace_id`` only adds a
+        precondition, "at least one event with this trace_id exists";
+        it does not scope verification to that trace alone. Corruption
+        in any event, in any trace, makes ``verify(trace_id=...)``
+        return False for every trace_id, not only the corrupted one.
+
+        Args:
+            trace_id: If given, additionally require that at least one
+                recorded event carries this trace_id. Does not narrow
+                what gets verified.
+
+        Returns:
+            True if the whole recorder's history is internally
+            consistent (and, when trace_id is given, that trace_id was
+            seen at all). False otherwise.
+        """
         with self._lock:
             events = tuple(self._events)
         if trace_id is not None and not any(
@@ -346,26 +486,7 @@ class TraceRecorder:
     @staticmethod
     def _verify_terminals(events: list[TraceEvent]) -> bool:
         """Validate start/terminal pairs for instrumented execution kinds."""
-        terminal_by_start = {
-            "trace.started": {"trace.completed", "trace.failed"},
-            "pipeline.started": {
-                "pipeline.completed",
-                "pipeline.rejected",
-                "pipeline.failed",
-            },
-            "pipeline.stage_started": {
-                "pipeline.stage_completed",
-                "pipeline.stage_rejected",
-                "pipeline.stage_skipped",
-                "pipeline.stage_failed",
-            },
-            "broadcast.started": {"broadcast.completed", "broadcast.failed"},
-            "route.selected": {"route.completed", "route.failed"},
-            "agent.started": {"agent.completed", "agent.failed"},
-            "expert.started": {"expert.completed", "expert.failed"},
-            "handler.authorized": {"handler.started", "handler.blocked"},
-            "handler.started": {"handler.completed", "handler.failed"},
-        }
+        terminal_by_start = _TERMINAL_BY_START
         events_by_run: dict[str, list[TraceEvent]] = {}
         for event in events:
             events_by_run.setdefault(event.run_id, []).append(event)
@@ -388,9 +509,7 @@ class TraceRecorder:
             if len(trace_starts) != 1:
                 return False
             trace_terminals = [
-                event
-                for event in events
-                if event.kind in {"trace.completed", "trace.failed"}
+                event for event in events if event.kind in TRACE_TERMINAL_KINDS
             ]
             if len(trace_terminals) != 1:
                 return False
@@ -400,5 +519,6 @@ class TraceRecorder:
 
     @property
     def event_count(self) -> int:
+        """How many events this recorder currently holds."""
         with self._lock:
             return len(self._events)

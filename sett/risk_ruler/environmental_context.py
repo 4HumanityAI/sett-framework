@@ -15,13 +15,17 @@ This is the mechanism that enables the "warehouse scenario":
     - Emergency services are notified if level >= LEVEL_4
 
 Privacy design:
-    The EnvironmentalContext NEVER contains personal data about the user
-    that triggered it. It only contains:
-    - The resulting RiskLevel
-    - The location identifier
-    - The domain of the publishing agent (e.g. "health", "environment")
-    - A timestamp
-    No names, no biometrics, no identifiers.
+    EnvironmentalContext is SHAPED to carry only non-personal signals:
+    a RiskLevel, a location identifier, the domain of the publishing
+    agent, a timestamp, and an optional free-text `message`. Nothing
+    about the object's structure requires personal data.
+
+    This is a structural intent, not a runtime guarantee (F11,
+    defensive audit #2): `location_id`, `source_domain`, and `message`
+    are plain strings, and nothing in this class inspects or rejects
+    their content. The caller building an EnvironmentalContext is
+    responsible for keeping personal data out of it - in particular,
+    do not put names, biometrics, or other identifiers into `message`.
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
@@ -47,12 +51,18 @@ class EnvironmentalContext:
     derived from (but not exposing) the user's RiskProfile.
 
     Usage:
-        ctx = EnvironmentalContext(
+        orchestrator.publish_environmental_context(
             risk_level=RiskLevel.LEVEL_3,
             location_id="store_42",
             source_domain="health",
         )
-        orchestrator.publish_environmental_context(ctx)
+        # publish_environmental_context() builds the EnvironmentalContext
+        # itself from these fields (F25, defensive audit #2: this example
+        # previously constructed the object by hand and passed it in, but
+        # the Orchestrator's real signature takes the raw fields, not a
+        # ready-made EnvironmentalContext - that call belongs to
+        # UniversalMemory.publish_environmental_context(context), not this
+        # one).
 
         # From another instance:
         ctx = orchestrator.read_environmental_context("store_42")
@@ -81,7 +91,11 @@ class EnvironmentalContext:
     message: str = ""
     """
     Optional human-readable description of why this level was triggered.
-    Must NOT contain personal information.
+    This is a free-text field: nothing in EnvironmentalContext inspects
+    or filters its content (F11, defensive audit #2). The caller
+    constructing this context is responsible for keeping it free of
+    personal information - it is broadcast to every other instance
+    reading this location's environmental context.
     Example: "Elevated biometric indicators detected in environment."
     """
 
@@ -89,14 +103,21 @@ class EnvironmentalContext:
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
 
-    auto_notify_emergency: bool = field(init=False)
+    should_notify_emergency: bool = field(init=False)
     """
-    If True, the orchestrator should automatically contact emergency services.
-    Derived from risk_level: True for LEVEL_4 and LEVEL_5.
+    True when this context's risk level (LEVEL_4 or LEVEL_5) warrants
+    notifying emergency services.
+
+    This is a recommendation derived from risk_level, not an effect:
+    setting this field never contacts anyone (F20, defensive audit #2 -
+    renamed from `auto_notify_emergency`, whose name implied an
+    automatic side effect that no code in this framework performs). A
+    caller that wants the real notification to happen must submit it
+    as an explicit, auditable Action through SETTExecutor.
     """
 
     def __post_init__(self) -> None:
-        self.auto_notify_emergency = self.risk_level.is_critical()
+        self.should_notify_emergency = self.risk_level.is_critical()
 
     @property
     def requires_response(self) -> bool:
@@ -119,7 +140,10 @@ class EnvironmentalContext:
         How much this environmental context should tighten the EthicalFilter.
         Higher RiskLevel → lower thresholds → filter becomes more strict.
 
-        Returns a negative float that is subtracted from the filter's thresholds.
+        Returns a non-negative float that the filter SUBTRACTS from its
+        thresholds, so a larger number means stricter. (This line used to
+        say "negative", which described neither the values below nor the
+        subtraction the filter performs.)
         At LEVEL_0: no change (0.0)
         At LEVEL_5: thresholds drop by 4.0 (very strict)
         """
@@ -145,18 +169,29 @@ class EnvironmentalContext:
             "timestamp": self.timestamp,
             "requires_response": self.requires_response,
             "requires_evacuation": self.requires_evacuation,
-            "auto_notify_emergency": self.auto_notify_emergency,
+            "should_notify_emergency": self.should_notify_emergency,
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "EnvironmentalContext":
-        """Reconstruct from UniversalMemory storage."""
-        return cls(
-            risk_level=RiskLevel(data["risk_level"]),
-            location_id=data.get("location_id", "global"),
-            source_domain=data.get("source_domain", "unknown"),
-            message=data.get("message", ""),
-        )
+        """Reconstruct from UniversalMemory storage.
+
+        F03 fix (defensive audit #2): ``timestamp`` used to be dropped
+        here even though ``to_dict()`` always serializes it, so every
+        read through UniversalMemory silently replaced the real publish
+        time with the moment it happened to be read - the same class of
+        bug as RiskProfile.from_dict()'s own timestamp loss (F12).
+        """
+        kwargs: dict[str, Any] = {
+            "risk_level": RiskLevel(data["risk_level"]),
+            "location_id": data.get("location_id", "global"),
+            "source_domain": data.get("source_domain", "unknown"),
+            "message": data.get("message", ""),
+        }
+        timestamp = data.get("timestamp")
+        if timestamp is not None:
+            kwargs["timestamp"] = timestamp
+        return cls(**kwargs)
 
     @classmethod
     def normal(cls, location_id: str = "global") -> "EnvironmentalContext":

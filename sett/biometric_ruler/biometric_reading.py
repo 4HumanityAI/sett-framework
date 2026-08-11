@@ -7,9 +7,12 @@ risk_ruler: a typed value object that ethics_ruler consumes, not a
 component that decides anything by itself.
 """
 from __future__ import annotations
+import math
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, ClassVar
+
+from sett.exceptions import SETTValidationError
 
 
 @dataclass(frozen=True)
@@ -49,6 +52,31 @@ class BiometricReading:
         repr=False,
     )
 
+    def __post_init__(self) -> None:
+        """F14 fix (defensive audit #2).
+
+        A mistyped vital sign (a string, a list, anything not a real
+        number) used to construct successfully and only fail later, with
+        a bare ``TypeError`` from the ``>``/``<`` comparisons inside
+        ``is_critical`` - raised far from where the bad value actually
+        came from, and not the structured exception type the rest of
+        this framework raises for invalid data. Validating here fails at
+        construction instead, with a message that names the field.
+        """
+        for name in ("heart_rate_bpm", "temperature_celsius"):
+            value = getattr(self, name)
+            if value is None:
+                continue
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                raise SETTValidationError(
+                    f"BiometricReading.{name} must be a number or None, "
+                    f"got {type(value).__name__}."
+                )
+            if not math.isfinite(value):
+                raise SETTValidationError(
+                    f"BiometricReading.{name} must be finite, got {value!r}."
+                )
+
     @property
     def is_critical(self) -> bool:
         """
@@ -85,9 +113,19 @@ class BiometricReading:
         shared parser, a second call site added later could silently
         reintroduce the identical bug by guessing the shape differently.
 
-        Never raises: a context with no usable health data (missing,
-        wrong type, or empty) returns a BiometricReading with both
-        fields None, which is never critical.
+        A context with no usable health data - missing, empty, or not a
+        mapping at all - returns a BiometricReading with both fields
+        None, which is never critical. That is the absent case, and it is
+        deliberately not an error: a system without a wearable attached
+        must still run.
+
+        A value that is present but not a number is a different case and
+        does raise SETTValidationError. "fast" where a heart rate belongs
+        is a bug in whatever produced it, and silently reading it as
+        "no data" would turn a broken sensor into a healthy one - the
+        opposite of what this class is for. (An earlier version of this
+        docstring said "never raises", which stopped being true when that
+        validation was added.)
         """
         health_data = context.get("health", {})
         if not (isinstance(health_data, dict) and health_data):

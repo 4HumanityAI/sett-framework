@@ -6,7 +6,7 @@ dependencies (pip install sett-framework[google-tts-stt]): this test
 environment does not have them installed, matching how
 AnthropicAdapter/OpenAIAdapter/GeminiAdapter have no dedicated test
 file today (they need their real SDK to test meaningfully and this
-project does not pretend otherwise, see SETT_Conventions_v2.md #16).
+project does not pretend otherwise, see SETT_Conventions.md #16).
 
 What IS tested here without the real SDK:
   - the "package not installed" path (real behavior in this
@@ -70,12 +70,24 @@ def _fake_google_cloud_sys_modules(submodule_name: str, submodule_mock: MagicMoc
     """
     google_cloud_mock = MagicMock(name="google.cloud")
     setattr(google_cloud_mock, submodule_name, submodule_mock)
+
+    # F18 fix: the adapter now loads credentials explicitly via
+    # google.oauth2.service_account instead of mutating os.environ, so
+    # that import must resolve too - same parent-attribute caveat as
+    # google.cloud above.
+    service_account_mock = MagicMock(name="google.oauth2.service_account")
+    oauth2_mock = MagicMock(name="google.oauth2")
+    oauth2_mock.service_account = service_account_mock
+
     google_mock = MagicMock(name="google")
     google_mock.cloud = google_cloud_mock
+    google_mock.oauth2 = oauth2_mock
     return {
         "google": google_mock,
         "google.cloud": google_cloud_mock,
         f"google.cloud.{submodule_name}": submodule_mock,
+        "google.oauth2": oauth2_mock,
+        "google.oauth2.service_account": service_account_mock,
     }
 
 
@@ -137,22 +149,76 @@ class TestGoogleTTSAdapterSynthesize:
             adapter = GoogleTTSAdapter()
             assert adapter.audio_format == "mp3"
 
-    def test_missing_credentials_raises_sett_service_adapter_error(self, monkeypatch):
+    def test_missing_credentials_surface_as_a_framework_error(self, monkeypatch):
+        """The client library decides; SETT only retypes its refusal.
+
+        This used to assert that an unset GOOGLE_APPLICATION_CREDENTIALS
+        was itself the error. That encoded a defect: Application Default
+        Credentials resolve from five sources and the environment variable
+        is one, so the check refused four valid setups - including GKE
+        workload identity, where the only way to satisfy it was the
+        service account key file Google recommends avoiding.
+        """
+        monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
+        fake_module, _ = _fake_texttospeech_module()
+
+        class DefaultCredentialsError(Exception):
+            pass
+
+        fake_module.TextToSpeechClient.side_effect = DefaultCredentialsError(
+            "Your default credentials were not found."
+        )
+        with patch.dict(sys.modules, _fake_google_cloud_sys_modules("texttospeech", fake_module)):
+            from sett.services_tts_stt.google import GoogleTTSAdapter
+            with pytest.raises(SETTServiceAdapterError) as excinfo:
+                GoogleTTSAdapter()
+        assert "credentials" in str(excinfo.value).lower()
+
+    def test_ambient_credentials_without_the_env_var_are_accepted(
+        self, monkeypatch
+    ):
+        """The regression itself: metadata / workload identity must work.
+
+        With no environment variable and no explicit path, the client
+        constructs successfully because the environment supplied
+        credentials some other way. SETT must not stand in front of that.
+        """
         monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
         fake_module, _ = _fake_texttospeech_module()
         with patch.dict(sys.modules, _fake_google_cloud_sys_modules("texttospeech", fake_module)):
             from sett.services_tts_stt.google import GoogleTTSAdapter
-            with pytest.raises(SETTServiceAdapterError):
-                GoogleTTSAdapter()
+            GoogleTTSAdapter()
+            fake_module.TextToSpeechClient.assert_called_once_with(credentials=None)
 
-    def test_credentials_path_argument_sets_env_var(self, monkeypatch):
+    def test_credentials_path_argument_builds_explicit_credentials(
+        self, monkeypatch
+    ):
+        """F18 regression (defensive audit #2): see the matching test in
+        test_google_sentiment_adapter.py for the full rationale. The
+        environment must stay untouched and the client must receive an
+        explicit `credentials=` built from the given path.
+        """
         monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
         fake_module, _ = _fake_texttospeech_module()
-        with patch.dict(sys.modules, _fake_google_cloud_sys_modules("texttospeech", fake_module)):
+        modules = _fake_google_cloud_sys_modules("texttospeech", fake_module)
+        fake_credentials = object()
+        modules[
+            "google.oauth2.service_account"
+        ].Credentials.from_service_account_file.return_value = fake_credentials
+        with patch.dict(sys.modules, modules):
             from sett.services_tts_stt.google import GoogleTTSAdapter
             GoogleTTSAdapter(credentials_path="/explicit/creds.json")
+
+            modules[
+                "google.oauth2.service_account"
+            ].Credentials.from_service_account_file.assert_called_once_with(
+                "/explicit/creds.json"
+            )
+            fake_module.TextToSpeechClient.assert_called_once_with(
+                credentials=fake_credentials
+            )
             import os
-            assert os.environ["GOOGLE_APPLICATION_CREDENTIALS"] == "/explicit/creds.json"
+            assert "GOOGLE_APPLICATION_CREDENTIALS" not in os.environ
 
     def test_synthesize_wraps_client_error(self, fake_google_credentials):
         fake_module, client = _fake_texttospeech_module()
@@ -199,10 +265,64 @@ class TestGoogleSTTAdapterTranscribe:
                 adapter.transcribe(b"bad-bytes")
             assert "bad audio encoding" in str(exc_info.value)
 
-    def test_missing_credentials_raises_sett_service_adapter_error(self, monkeypatch):
+    def test_credentials_path_argument_builds_explicit_credentials(
+        self, monkeypatch
+    ):
+        """F18 regression (defensive audit #2), STT side."""
+        monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
+        fake_module, _ = _fake_speech_module()
+        modules = _fake_google_cloud_sys_modules("speech", fake_module)
+        fake_credentials = object()
+        modules[
+            "google.oauth2.service_account"
+        ].Credentials.from_service_account_file.return_value = fake_credentials
+        with patch.dict(sys.modules, modules):
+            from sett.services_tts_stt.google import GoogleSTTAdapter
+            GoogleSTTAdapter(credentials_path="/explicit/creds.json")
+
+            fake_module.SpeechClient.assert_called_once_with(
+                credentials=fake_credentials
+            )
+            import os
+            assert "GOOGLE_APPLICATION_CREDENTIALS" not in os.environ
+
+    def test_missing_credentials_surface_as_a_framework_error(self, monkeypatch):
+        """The client library decides; SETT only retypes its refusal.
+
+        This used to assert that an unset GOOGLE_APPLICATION_CREDENTIALS
+        was itself the error. That encoded a defect: Application Default
+        Credentials resolve from five sources and the environment variable
+        is one, so the check refused four valid setups - including GKE
+        workload identity, where the only way to satisfy it was the
+        service account key file Google recommends avoiding.
+        """
+        monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
+        fake_module, _ = _fake_speech_module()
+
+        class DefaultCredentialsError(Exception):
+            pass
+
+        fake_module.SpeechClient.side_effect = DefaultCredentialsError(
+            "Your default credentials were not found."
+        )
+        with patch.dict(sys.modules, _fake_google_cloud_sys_modules("speech", fake_module)):
+            from sett.services_tts_stt.google import GoogleSTTAdapter
+            with pytest.raises(SETTServiceAdapterError) as excinfo:
+                GoogleSTTAdapter()
+        assert "credentials" in str(excinfo.value).lower()
+
+    def test_ambient_credentials_without_the_env_var_are_accepted(
+        self, monkeypatch
+    ):
+        """The regression itself: metadata / workload identity must work.
+
+        With no environment variable and no explicit path, the client
+        constructs successfully because the environment supplied
+        credentials some other way. SETT must not stand in front of that.
+        """
         monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
         fake_module, _ = _fake_speech_module()
         with patch.dict(sys.modules, _fake_google_cloud_sys_modules("speech", fake_module)):
             from sett.services_tts_stt.google import GoogleSTTAdapter
-            with pytest.raises(SETTServiceAdapterError):
-                GoogleSTTAdapter()
+            GoogleSTTAdapter()
+            fake_module.SpeechClient.assert_called_once_with(credentials=None)

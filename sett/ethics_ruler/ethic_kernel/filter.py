@@ -30,7 +30,11 @@ from sett.ethics_ruler.ethic_kernel.context_analyzer import (
     ContextAnalyzer,
 )
 from sett.ethics_ruler.ethic_kernel.rules import EthicalRuleset, default_ruleset
-from sett.exceptions import SETTEthicalFilterRejectedError
+from sett.exceptions import (
+    SETTConfigurationError,
+    SETTEthicalFilterRejectedError,
+    SETTValidationError,
+)
 
 if TYPE_CHECKING:
     from sett.audit_ruler.trace import TraceEvent, TraceRecorder
@@ -41,6 +45,8 @@ logger = logging.getLogger(__name__)
 
 
 class FilterVerdict(Enum):
+    """The three answers the EthicalFilter can give about an action."""
+
     ALLOW  = "allow"
     WARN   = "warn"
     REJECT = "reject"
@@ -61,6 +67,7 @@ class EthicalFilter:
         ruleset: EthicalRuleset | None = None,
         context_analyzer: ContextAnalyzer | None = None,
     ) -> None:
+        """Build a filter over a ruleset and a default context analyzer."""
         self._ruleset = ruleset or default_ruleset()
         self._context_analyzer = context_analyzer or ContextAnalyzer()
         self._analyzers_by_action_type: dict[str, ContextAnalyzer] = {}
@@ -97,7 +104,32 @@ class EthicalFilter:
             filter = EthicalFilter()  # generic analyzer as fallback
             filter.register_analyzer("confirm_purchase", EconomicContextAnalyzer())
             # any other action_type still uses the generic analyzer
+
+        Raises:
+            SETTValidationError: If action_type is empty/whitespace, or
+                analyzer is not a ContextAnalyzer (F21, defensive audit
+                #2: previously unvalidated).
+            SETTConfigurationError: If action_type already has an
+                analyzer registered (F05, defensive audit #2). Call
+                unregister_analyzer() first to replace one deliberately -
+                the same "explicit swap, not implicit overwrite" contract
+                SETTExecutor's handler registration now has.
         """
+        if not isinstance(action_type, str) or not action_type.strip():
+            raise SETTValidationError(
+                "action_type must be a non-empty string."
+            )
+        if not isinstance(analyzer, ContextAnalyzer):
+            raise SETTValidationError(
+                "analyzer must be a ContextAnalyzer instance."
+            )
+        if action_type in self._analyzers_by_action_type:
+            raise SETTConfigurationError(
+                f"An analyzer is already registered for action_type "
+                f"{action_type!r}. Call "
+                f"filter.unregister_analyzer({action_type!r}) first if "
+                f"you intend to replace it."
+            )
         self._analyzers_by_action_type[action_type] = analyzer
 
     def unregister_analyzer(self, action_type: str) -> None:
@@ -324,14 +356,17 @@ class EthicalFilter:
         return verify_chain(self._audit_log)
 
     def set_ruleset(self, ruleset: EthicalRuleset) -> None:
+        """Replace the ruleset every later verdict is measured against."""
         self._ruleset = ruleset
         logger.info("[EthicalFilter] Ruleset updated to: %s", ruleset.name)
 
     def set_context_analyzer(self, analyzer: ContextAnalyzer) -> None:
+        """Replace the default analyzer used when no domain one matches."""
         self._context_analyzer = analyzer
 
     @property
     def principle(self) -> str:
+        """The one sentence the active ruleset exists to enforce."""
         return self._ruleset.principle
 
     def __repr__(self) -> str:

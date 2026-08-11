@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -16,7 +17,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Any, Generic, TypeAlias, TypeVar
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 from sett.exceptions import SETTValidationError
 
@@ -27,15 +28,56 @@ T = TypeVar("T")
 _MAX_METADATA_KEYS = 32
 _MAX_METADATA_DEPTH = 8
 _MAX_METADATA_BYTES = 16 * 1024
-_SENSITIVE_FRAGMENTS = (
+
+# The single, shared definition of "this attribute/metadata key looks like
+# a secret". Trace attributes (audit_ruler/trace.py) reuse this exact list
+# rather than keeping a second copy - F17 (defensive audit #2): the two
+# had already diverged, with trace.py's own list including "medical",
+# "health_record" and "biometric" that this one lacked.
+#
+# Fragments are matched against a *normalized* key - separators
+# (underscore, hyphen, space) stripped - rather than the raw lowercased
+# key. A plain substring check misses common spelling variants of the
+# same sensitive field ("apiKey", "x-api-key", "api.key", "private/key")
+# simply because the separator characters differ from the one fragment
+# that was hard-coded, which is exactly what normalizing both sides
+# before comparing closes as a class, not one alias at a time.
+SENSITIVE_KEY_FRAGMENTS: tuple[str, ...] = (
     "password",
+    "passwd",
     "secret",
     "token",
     "authorization",
+    "bearer",
     "cookie",
-    "api_key",
+    "apikey",
+    "privatekey",
     "credential",
+    "medical",
+    "healthrecord",
+    "biometric",
 )
+
+# Every character that is not a letter or a digit. An earlier version
+# listed the separators it knew about (space, underscore, hyphen), which
+# closed the aliases somebody thought of and left "api.key", "api/key",
+# "api:key" and "api|key" open - the same defect one layer down, since
+# the point of normalizing at all is that the separator must not matter.
+# Removing all of them makes the rule "letters and digits decide", which
+# has no list to keep up to date.
+_SEPARATOR_PATTERN = re.compile(r"[^a-z0-9]+")
+
+
+def normalize_key_for_sensitivity_check(key: str) -> str:
+    """Lowercase ``key`` and strip separators, for sensitive-key matching."""
+    return _SEPARATOR_PATTERN.sub("", key.lower())
+
+
+def is_sensitive_key(key: str) -> bool:
+    """Whether ``key`` looks like it names a secret, under any spelling."""
+    normalized = normalize_key_for_sensitivity_check(key)
+    return any(fragment in normalized for fragment in SENSITIVE_KEY_FRAGMENTS)
+
 
 _ACTIVE_CONTEXT: ContextVar[ExecutionContext | None] = ContextVar(
     "sett_execution_context", default=None
@@ -84,7 +126,7 @@ def _freeze_value(value: Any, depth: int = 0) -> JsonValue:
                     "ExecutionContext metadata keys beginning with 'sett.' "
                     "are reserved for the framework."
                 )
-            if any(fragment in lowered for fragment in _SENSITIVE_FRAGMENTS):
+            if is_sensitive_key(raw_key):
                 raise SETTValidationError(
                     f"ExecutionContext metadata key {raw_key!r} is sensitive "
                     "and cannot be used for trace correlation."

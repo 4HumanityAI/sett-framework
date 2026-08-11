@@ -28,9 +28,13 @@ carried over:
 Requires: pip install sett-framework[google-sentiment]
 """
 from __future__ import annotations
-import os
 from typing import Any
 
+from sett.core_ruler.lifecycle import pop_lifecycle_kwargs
+from sett.services_google_auth import (
+    google_credentials_from_path,
+    build_google_client,
+)
 from sett.services_sentiment.base import SentimentBase, SentimentResult, SentenceSentiment
 from sett.exceptions import SETTServiceAdapterError
 
@@ -51,8 +55,12 @@ class GoogleSentimentAdapter(SentimentBase):
         """
         Args:
             credentials_path: Path to a Google Cloud service account
-                JSON key. Falls back to the GOOGLE_APPLICATION_CREDENTIALS
-                environment variable if not given.
+                JSON key, scoped to this instance only. When omitted, the
+                client resolves Application Default Credentials on its
+                own, in full: GOOGLE_APPLICATION_CREDENTIALS, a gcloud
+                login, GCE/GKE metadata or workload identity all apply,
+                because this adapter does not second-guess which one is
+                in use.
         """
         try:
             from google.cloud import language_v1
@@ -64,16 +72,13 @@ class GoogleSentimentAdapter(SentimentBase):
                 "pip install sett-framework[google-sentiment]"
             )
 
-        if credentials_path:
-            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_path
-        if not os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
-            raise SETTServiceAdapterError(
-                "Google Cloud credentials not found. Pass credentials_path= "
-                "or set the GOOGLE_APPLICATION_CREDENTIALS environment "
-                "variable to a service account JSON key."
-            )
+        credentials = google_credentials_from_path(credentials_path)
 
-        self._client = self._language_v1.LanguageServiceClient()
+        self._client = build_google_client(
+            self._language_v1.LanguageServiceClient,
+            credentials=credentials,
+            adapter_name="GoogleSentimentAdapter",
+        )
 
     def analyze(self, text: str, **kwargs: Any) -> SentimentResult:
         """
@@ -81,20 +86,25 @@ class GoogleSentimentAdapter(SentimentBase):
 
         Args:
             text: The text to analyze.
-            **kwargs: unused; accepted for interface compatibility.
+            **kwargs: the framework's reserved ``timeout`` and
+                ``cancellation_token`` are honoured; anything else is
+                accepted for interface compatibility and ignored.
 
         Returns:
             A SentimentResult with document-level score/magnitude and
             a per-sentence breakdown (Google Cloud NL always returns
             sentence-level detail, so it is always populated here).
         """
+        lifecycle = pop_lifecycle_kwargs(kwargs)
+        lifecycle.throw_if_cancelled()
         try:
             document = self._language_v1.Document(
                 content=text,
                 type_=self._language_v1.Document.Type.PLAIN_TEXT,
             )
             response = self._client.analyze_sentiment(
-                request={"document": document}
+                request={"document": document},
+                timeout=lifecycle.effective_timeout(None),
             )
             sentences = tuple(
                 SentenceSentiment(

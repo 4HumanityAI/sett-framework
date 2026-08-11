@@ -22,7 +22,12 @@ from sett.core_ruler.execution_context import (
     current_execution_context,
     current_trace_cause_id,
 )
-from sett.exceptions import SETTConfigurationError, SETTEthicalFilterRejectedError
+from sett.exceptions import (
+    SETTConfigurationError,
+    SETTEthicalFilterRejectedError,
+    SETTMemoryAccessDeniedError,
+    SETTValidationError,
+)
 
 if TYPE_CHECKING:
     from sett.audit_ruler.trace import TraceRecorder
@@ -30,8 +35,96 @@ if TYPE_CHECKING:
     from sett.risk_ruler.environmental_context import EnvironmentalContext
     from sett.risk_ruler.risk_profile import RiskProfile
 
-# Reserved key prefix for environmental context entries
-_ENV_CONTEXT_PREFIX = "__env_ctx__"
+# Reserved key prefix for environmental context entries.
+#
+# One store holds two kinds of entry - agent results under their domain,
+# and environmental contexts under this prefix - and telling them apart
+# is what read_all() and read_environmental_context() rely on. A domain
+# that happens to start with the prefix therefore lands in the store as
+# an agent result and is read back as an environmental context: it
+# disappears from read_all() and makes read_environmental_context()
+# search for fields a normal result does not have. The prefix is
+# reserved below rather than merely undocumented.
+ENV_CONTEXT_PREFIX = "__env_ctx__"
+
+# Retained as an alias: existing call sites in this module use this name.
+_ENV_CONTEXT_PREFIX = ENV_CONTEXT_PREFIX
+
+# RiskProfile's own three pillar field names (see risk_ruler/risk_profile.py).
+# RiskProfile.to_dict() is documented to live exclusively in PrivateMemory:
+# these names, or a raw RiskProfile instance, are rejected anywhere inside
+# a published result rather than merely being undocumented to publish.
+_RISK_PROFILE_RESERVED_KEYS = frozenset(
+    {
+        "emotional_instability",
+        "influence_vulnerability",
+        "collateral_damage_potential",
+    }
+)
+
+
+def _reject_reserved_agent_name(agent: str) -> None:
+    """Refuse a domain that would land inside the environmental namespace.
+
+    Checked here rather than in ``SETTAgent.__init__`` because the
+    namespace belongs to this class: the prefix is defined here, both
+    kinds of entry live in this store, and every write - from an agent or
+    from a direct caller - passes through ``update()``. Validating in the
+    agent constructor as well would put this module's constant in a
+    second place to keep in step.
+    """
+    if not isinstance(agent, str) or not agent.strip():
+        raise SETTValidationError(
+            "UniversalMemory agent domain must be a non-empty string, "
+            f"got {agent!r}."
+        )
+    if agent.startswith(ENV_CONTEXT_PREFIX):
+        raise SETTValidationError(
+            f"Agent domain {agent!r} is reserved: the prefix "
+            f"{ENV_CONTEXT_PREFIX!r} identifies environmental context "
+            "entries in this store, so a domain starting with it would be "
+            "written as a result and read back as an environmental "
+            "context. Publish environmental state with "
+            "publish_environmental_context() instead."
+        )
+
+
+def _reject_risk_profile_leak(value: Any, *, agent: str) -> None:
+    """Recursively refuse a RiskProfile, or its reserved fields, in ``value``.
+
+    A cooperative Expert never does this - it has no reason to reach for
+    these names. What this guards against is an adversarial or simply
+    careless one that embeds a raw ``RiskProfile`` instance, or its
+    serialized pillar keys, inside the dict it hands to ``update()``. The
+    existing privacy test only exercised the cooperative case; this makes
+    the documented "RiskProfile never leaves PrivateMemory" boundary a
+    structural check at the one place everything published to
+    UniversalMemory must pass through, rather than a promise every future
+    Expert author has to remember unprompted.
+    """
+    from sett.risk_ruler.risk_profile import RiskProfile
+
+    if isinstance(value, RiskProfile):
+        raise SETTMemoryAccessDeniedError(
+            f"Agent '{agent}' tried to publish a RiskProfile instance to "
+            "UniversalMemory. RiskProfile values are private to the "
+            "assessing agent and must stay in PrivateMemory; only the "
+            "derived RiskLevel may be shared, via "
+            "publish_environmental_context()."
+        )
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            if isinstance(key, str) and key in _RISK_PROFILE_RESERVED_KEYS:
+                raise SETTMemoryAccessDeniedError(
+                    f"Agent '{agent}' tried to publish reserved RiskProfile "
+                    f"field '{key}' to UniversalMemory. RiskProfile pillar "
+                    "values are private to the assessing agent and must "
+                    "stay in PrivateMemory."
+                )
+            _reject_risk_profile_leak(nested, agent=agent)
+    elif isinstance(value, (list, tuple, set, frozenset)):
+        for item in value:
+            _reject_risk_profile_leak(item, agent=agent)
 
 
 class UniversalMemory:
@@ -53,6 +146,7 @@ class UniversalMemory:
     """
 
     def __init__(self) -> None:
+        """Start an empty shared memory, with no filter or recorder attached."""
         self._store: dict[str, dict[str, Any]] = {}
         self._history: list[dict[str, Any]] = []
         self._ethical_filter: EthicalFilter | None = None
@@ -98,6 +192,22 @@ class UniversalMemory:
         The publishing agent's domain is still available, namespaced as
         "_source_agent" to avoid colliding with the agent's own data.
         """
+        # One read of the caller's object, at the door. Everything below -
+        # the leak check, the filter's context, the stored value - is
+        # derived from this single copy and never from `result` again.
+        #
+        # Reading it twice (once to evaluate, once to store) left a window
+        # in which another thread holding the same dict could change it in
+        # between, so the filter approved one value and a different one was
+        # stored. That is not a caller discipline problem: SETT's guarantee
+        # is that what policy approved is what happens, and a guarantee
+        # that depends on nobody touching an object they still hold is not
+        # structural. Copying once closes the window without a lock,
+        # because there is no longer a second read to race against.
+        _reject_reserved_agent_name(agent)
+        published = deepcopy(result)
+        _reject_risk_profile_leak(published, agent=agent)
+
         trace_context = execution_context or current_execution_context()
         trace_cause = cause_id or current_trace_cause_id()
         proposed_event = None
@@ -110,12 +220,16 @@ class UniversalMemory:
                 status="proposed",
                 cause_id=trace_cause,
                 reason_codes=("memory.publication",),
-                attributes={"agent": agent, "field_count": len(result)},
+                attributes={"agent": agent, "field_count": len(published)},
             )
 
         policy_event = None
         if self._ethical_filter is not None:
-            context = dict(result)
+            # A further copy of the snapshot, not the snapshot itself: an
+            # analyzer that mutates what it was handed during evaluation
+            # would otherwise taint the very value this method goes on to
+            # store, with no signal that it happened.
+            context = deepcopy(published)
             context["_source_agent"] = agent
             try:
                 _, policy_event = self._ethical_filter._evaluate_with_trace(
@@ -149,9 +263,8 @@ class UniversalMemory:
                     error.trace_event_id = rejected_event.event_id
                 raise
 
-        safe_result = deepcopy(result)
         with self._lock:
-            self._store[agent] = safe_result
+            self._store[agent] = published
             append_chained_entry(self._history, {
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "agent": agent,
@@ -173,7 +286,7 @@ class UniversalMemory:
                     )
                 ),
                 reason_codes=("memory.publication",),
-                attributes={"agent": agent, "field_count": len(result)},
+                attributes={"agent": agent, "field_count": len(published)},
             )
 
     def evaluate_action(

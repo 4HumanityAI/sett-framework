@@ -100,6 +100,25 @@ class TestExecutionContext:
         with pytest.raises(SETTValidationError):
             ExecutionContext.create(metadata=metadata)
 
+    @pytest.mark.parametrize(
+        "metadata",
+        [
+            {"apiKey": "raw"},
+            {"x-api-key": "raw"},
+            {"passwd": "raw"},
+            {"private_key": "raw"},
+            {"medical_record": "raw"},
+        ],
+    )
+    def test_unsafe_metadata_aliases_are_also_rejected(self, metadata):
+        """F16/F17 regression (defensive audit #2): ExecutionContext
+        metadata and trace attributes now share one sensitive-key
+        definition (SENSITIVE_KEY_FRAGMENTS in this module), so an alias
+        caught on the trace side is caught here too.
+        """
+        with pytest.raises(SETTValidationError):
+            ExecutionContext.create(metadata=metadata)
+
     def test_scope_restores_parent_and_then_clears(self):
         parent = ExecutionContext.create()
         child = parent.derive()
@@ -676,6 +695,40 @@ class TestTraceRecorderHardening:
         ["password", "api_token", "medical_record", "biometric_value"],
     )
     def test_sensitive_public_attributes_are_rejected(self, key):
+        recorder = TraceRecorder()
+        with pytest.raises(SETTValidationError):
+            recorder.record(
+                ExecutionContext.create(),
+                kind="custom.sensitive",
+                component_type="test",
+                component_name="sensitive",
+                status="failed",
+                attributes={key: "raw"},
+            )
+
+    @pytest.mark.parametrize(
+        "key",
+        [
+            "apiKey",
+            "x-api-key",
+            "X-Api-Key",
+            "passwd",
+            "private_key",
+            "privateKey",
+            "Authorization",
+            "Bearer",
+        ],
+    )
+    def test_sensitive_key_aliases_are_also_rejected(self, key):
+        """F16 regression (defensive audit #2).
+
+        A plain substring check against the lowercased key missed common
+        spelling variants of a sensitive field name whenever the
+        separator characters didn't match the one hard-coded alias
+        ("api_key" did not catch "apiKey" or "x-api-key"; "password" did
+        not catch "passwd"; nothing caught "private_key" at all).
+        Normalizing separators before comparing closes the whole class.
+        """
         recorder = TraceRecorder()
         with pytest.raises(SETTValidationError):
             recorder.record(

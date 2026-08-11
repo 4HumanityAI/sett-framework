@@ -75,6 +75,15 @@ class SentimentBase(ABC):
         class MySentimentAdapter(SentimentBase):
             def analyze(self, text, **kwargs):
                 return SentimentResult(score=0.2, magnitude=0.4)
+    
+    Two reserved keyword arguments (v0.12.0)
+    ----------------------------------------
+    ``timeout`` (seconds) and ``cancellation_token`` are reserved by the
+    framework inside ``**kwargs``. Adapters sit outside the Agent/Expert
+    tree and never receive an ambient control, so these two names are how
+    a run's remaining time and its cancellation reach a provider call.
+    Unpack them with ``pop_lifecycle_kwargs(kwargs)`` from
+    ``sett.core_ruler.lifecycle``; see ``LLMBase`` for a worked example.
     """
 
     @abstractmethod

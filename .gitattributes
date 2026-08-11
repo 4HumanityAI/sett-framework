@@ -1,0 +1,25 @@
+# Normalize line endings for everyone, regardless of each contributor's
+# local core.autocrlf setting: text files are stored and checked out as
+# LF. Without this, a Windows checkout with autocrlf=true silently
+# rewrites every text file's line endings on clone, which turns an
+# unrelated future change into a full-file diff and makes "what actually
+# changed" unreadable in review. Binary files are left untouched.
+* text=auto eol=lf
+
+*.py text eol=lf
+*.md text eol=lf
+*.toml text eol=lf
+*.txt text eol=lf
+*.cfg text eol=lf
+*.ini text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf
+LICENSE text eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.pdf binary
+*.zip binary

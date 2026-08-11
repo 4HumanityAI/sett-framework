@@ -19,7 +19,7 @@ Usage:
     from sett import SETTOrchestrator, SETTAgent, SETTExpert, EthicalFilter
 """
 
-__version__ = "0.11.0"
+__version__ = "0.12.0"
 __author__ = "Eduardo Daniel Viñales"
 __license__ = "MIT"
 
@@ -42,7 +42,37 @@ from sett.core_ruler.pipeline import (
     PipelineResult,
     StageOutcome,
     RejectionOutcome,
+    SkipCause,
 )
+
+# Lifecycle: cancellation, deadlines and structured outcomes
+from sett.core_ruler.lifecycle import (
+    CancellationSnapshot,
+    CancellationSource,
+    CancellationToken,
+    Deadline,
+    ExecutionControl,
+    ExecutionControlRegistry,
+    LifecyclePolicy,
+    current_execution_control,
+    lifecycle_scope,
+)
+from sett.core_ruler.execution_result import (
+    ExecutionResult,
+    ExecutionState,
+    ExecutionStatus,
+)
+from sett.core_ruler.executor import HandlerContext, current_handler_context
+from sett.core_ruler.idempotency import (
+    ActionAttempt,
+    IdempotencyRecord,
+    IdempotencyReservation,
+    IdempotencyStatus,
+    IdempotencyStore,
+    InMemoryIdempotencyStore,
+    action_fingerprint,
+)
+from sett.core_ruler.retry import ErrorClass, RetryPolicy, classify_error
 
 # Memory layers
 from sett.memory_ruler.universal import UniversalMemory
@@ -91,6 +121,10 @@ from sett.exceptions import (
     SETTServiceAdapterError,
     SETTConfigurationError,
     SETTValidationError,
+    SETTCancelledError,
+    SETTTimeoutError,
+    SETTDependencyError,
+    SETTIdempotencyConflictError,
 )
 
 __all__ = [
@@ -111,6 +145,33 @@ __all__ = [
     "PipelineResult",
     "StageOutcome",
     "RejectionOutcome",
+    "SkipCause",
+    # Lifecycle
+    "CancellationSnapshot",
+    "CancellationSource",
+    "CancellationToken",
+    "Deadline",
+    "ExecutionControl",
+    "ExecutionControlRegistry",
+    "LifecyclePolicy",
+    "current_execution_control",
+    "lifecycle_scope",
+    "ExecutionResult",
+    "ExecutionState",
+    "ExecutionStatus",
+    # Idempotency and retries
+    "HandlerContext",
+    "current_handler_context",
+    "ActionAttempt",
+    "IdempotencyRecord",
+    "IdempotencyReservation",
+    "IdempotencyStatus",
+    "IdempotencyStore",
+    "InMemoryIdempotencyStore",
+    "action_fingerprint",
+    "ErrorClass",
+    "RetryPolicy",
+    "classify_error",
     # Memory
     "UniversalMemory",
     "PrivateMemory",
@@ -150,4 +211,8 @@ __all__ = [
     "SETTServiceAdapterError",
     "SETTConfigurationError",
     "SETTValidationError",
+    "SETTCancelledError",
+    "SETTTimeoutError",
+    "SETTDependencyError",
+    "SETTIdempotencyConflictError",
 ]

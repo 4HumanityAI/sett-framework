@@ -99,9 +99,11 @@ _ALLOWED_SNIPPETS = (
     "almacén",
     # CHANGELOG.md/README.md (v0.10.3) quote the OLD citation label and
     # filename ("Convención #N" / SETT_Convenciones_v2.md) to describe
-    # what got renamed to SETT_Conventions_v2.md and "Convention #N" -
-    # same "quote the past state to document the fix" pattern as
-    # "almacén" above, not a live citation.
+    # what got renamed to "Convention #N" and (at the time)
+    # SETT_Conventions_v2.md - renamed again, dropping "_v2", in v0.12.0
+    # (the file is SETT_Conventions.md today). Same "quote the past
+    # state to document the fix" pattern as "almacén" above in both
+    # cases, not a live citation either time.
     "Convención #N",
     "Convenciones_v2.md",
 )

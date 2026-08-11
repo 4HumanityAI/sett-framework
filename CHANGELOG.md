@@ -2,6 +2,295 @@
 
 All notable changes to the SETT framework are documented here.
 
+## [0.12.0] - 2026-08-10
+
+Lifecycle management: cancellation, deadlines, structured outcomes and
+idempotency for executions already in flight - together with the
+hardening that release auditing of this version turned up, several
+pieces of which fix behaviour that had been wrong since well before it.
+
+### Added
+- `ExecutionControl`, `ExecutionControlRegistry`, `CancellationToken`,
+  `CancellationSource`, `CancellationSnapshot` and `Deadline` in
+  `sett/core_ruler/lifecycle.py`. A control carries its own
+  `ExecutionContext`; subtree cancellation is resolved by walking the
+  `parent_id` chain that context tree already maintains, so no second
+  hierarchy is introduced and the `run_id` visible in an exported trace
+  event is the identifier that can be cancelled.
+- Cooperative cancellation with LIFO cleanup hooks, monotonic deadlines
+  that a nested unit can shorten but never extend, `lifecycle_scope()`
+  propagation via `contextvars`, and `LifecyclePolicy` for per-level
+  timeout defaults - run, stage, agent, adapter and handler.
+- `ExecutionStatus`, `ExecutionState` and `ExecutionResult` in
+  `sett/core_ruler/execution_result.py`. Six terminal statuses that keep
+  an ethical rejection, a cancellation, a deadline and a technical
+  failure apart. `ExecutionResult.unwrap()` re-raises the original
+  exception instance, preserving its concrete type and attributes.
+- `SETTOrchestrator.process_controlled()` and
+  `run_pipeline_controlled()`, added alongside the existing entry points
+  in the same way `process_traced()` was in v0.11.0. Partial pipeline
+  work is reported as `PARTIAL` with the completed stages' outputs still
+  reachable, never discarded.
+- `SETTOrchestrator.cancel(run_id)`, `control_registry` and
+  `lifecycle_policy`; `SETTOrchestrator(lifecycle_policy=...)`.
+- Automatic checkpoints at the already-instrumented boundaries (routing,
+  agents, registered experts, pipeline stages), so no existing agent or
+  expert subclass needs to change to become cancellable.
+- Idempotency in `sett/core_ruler/idempotency.py`: `action_fingerprint()`
+  with numeric canonicalization, `IdempotencyStore` protocol,
+  `InMemoryIdempotencyStore` reference implementation, `IdempotencyStatus`,
+  `IdempotencyRecord`, `IdempotencyReservation`, `ActionAttempt` and
+  `key_digest()`.
+- `RetryPolicy`, `ErrorClass` and `classify_error()` in
+  `sett/core_ruler/retry.py`. Retries are opt-in per error type; a set of
+  framework errors is never retried regardless of policy.
+- `SETTExecutor.submit_controlled()`, `register_controlled_handler()` and
+  `HandlerContext`, carrying the idempotency key and the run's real
+  remaining time into a handler. `submit()` is wrapped, not
+  reimplemented.
+- Reserved adapter keyword arguments `timeout` and `cancellation_token`,
+  with `pop_lifecycle_kwargs()`, `lifecycle_kwargs()` and
+  `AdapterLifecycle`. Honoured by every official adapter.
+- Per-instance Google Cloud credentials (`sett/services_google_auth.py`):
+  the TTS, STT and sentiment adapters no longer set
+  `GOOGLE_APPLICATION_CREDENTIALS` process-wide, where two differently
+  configured instances used to interfere with each other and with every
+  other Google client in the process.
+- Exceptions `SETTCancelledError`, `SETTTimeoutError`,
+  `SETTDependencyError` and `SETTIdempotencyConflictError`, all under
+  `SETTError`.
+- `SkipCause` on `StageOutcome`: a stage that never ran now names the
+  stage that made it unreachable, instead of only reporting that it did
+  not run.
+- Trace terminals for cancellation, deadlines and partial results at
+  every level, plus `handler.attempt_started`/`_completed`/`_failed` and
+  the idempotency events. `TraceRecorder.knows_event()`.
+- Eleven new test modules.
+
+### Fixed
+These were wrong in v0.11.0 and earlier.
+- A non-finite `risk_score` from a `ContextAnalyzer` reached `ALLOW`.
+  `nan >= threshold` is False in Python, so a single NaN cleared the
+  reject threshold and the warn threshold and arrived at an allow verdict
+  with no rule having allowed anything - a fail-open in the layer this
+  framework exists to make fail-closed. `ContextAnalysis` now refuses a
+  score that cannot be compared, at the one type every analyzer must
+  return.
+- Policy could approve one payload while the handler performed another.
+  `SETTExecutor.submit()` read the caller's `Action` twice - once to
+  build the filter's context, once to call the handler - and
+  `UniversalMemory.update()` read the published result twice. A thread
+  still holding the object could change it in between. Both now read once
+  at the door and derive everything from that single copy.
+- A domain beginning with `__env_ctx__` collided with the reserved
+  environmental-context namespace: it was stored as an agent result,
+  hidden from `read_all()`, and read back as an environmental context.
+  The prefix is now reserved, and `ENV_CONTEXT_PREFIX` is public.
+- `PrivateMemory.get_history()` returned the internal entries, so a
+  reader could edit the record of a write that already happened. It is
+  deep-copied now, like `read()` and `get_all()` already were.
+- `ElevenLabsTTSAdapter` accepted a whitespace-only API key, because the
+  `.strip()` covered only the environment lookup, and failed later as a
+  provider authentication error instead of at construction.
+- `RiskProfile` values could be published to `UniversalMemory` by an
+  uncooperative agent, despite the documented boundary. The check is now
+  structural, at the one place every publication passes through.
+- Sensitive metadata and trace keys were matched by plain substring, so
+  `apiKey`, `x-api-key`, `api.key` and `private/key` passed. Keys are now
+  normalized to letters and digits before comparison, and one shared
+  `is_sensitive_key()` serves both the context and the trace.
+- Provider SDK exceptions escaped adapter constructors untranslated.
+  `OpenAIAdapter`, `AnthropicAdapter` and `GeminiAdapter` built their
+  client outside any `try`, and `build_google_client()` re-raised
+  anything that was not exactly a `DefaultCredentialsError`, so
+  `except SETTError` around "build my adapters" did not hold and the
+  caller had to know each provider library's exception hierarchy to catch
+  a failure. Every construction failure now leaves as
+  `SETTLLMAdapterError` or `SETTServiceAdapterError` with the original
+  kept as `__cause__`; SETT's own cancellations and deadlines still pass
+  through with their type intact.
+- Adapter timeouts skipped the validator this release promised covered
+  them. `validate_duration_seconds()` was introduced so one rule would
+  serve every duration, and the five adapters holding their own
+  `timeout_seconds` - the three cloud LLM ones, `OllamaAdapter` and
+  `ElevenLabsTTSAdapter` - were the ones it did not reach. An adapter
+  could hold a `NaN` timeout, which compares False against every bound
+  and so is never reached. They validate now, on the same terms as
+  everywhere else.
+- An invisible character was enough to lower a `ContextAnalyzer` score.
+  Layer 1 matched keywords against the raw text, so `harm` written with a
+  zero-width space inside it, or `delete` written in fullwidth
+  characters, scored as ordinary prose. Text is now canonicalized first -
+  format characters dropped, `NFKC`, `casefold` - through the public
+  `canonicalize_for_keyword_match()`. What that cannot reach is stated
+  under Known limitations rather than implied to be covered.
+- `OllamaAdapter` let a malformed `base_url` escape as a bare
+  `ValueError` from urllib, walking through the `SETTLLMAdapterError`
+  protection every caller relies on - `PhrasingExpert` among them, which
+  answers with `fallback_text()` on exactly that type and so lost its
+  fallback. A `base_url` that is not an absolute http(s) URL naming a
+  host is now refused at construction, where a configuration mistake
+  belongs, and the request path translates every failure rather than the
+  three it happened to enumerate. SETT's own `SETTCancelledError` and
+  `SETTTimeoutError` still pass through with their type intact.
+- `HandlerContext.attempt_number` and the attempt log reset to 1 every
+  time a caller resubmitted an action under the same `idempotency_key`
+  after a retryable failure, instead of climbing the way
+  `IdempotencyRecord.attempt_count` already did for the same key. A
+  handler or an operator reading the log saw every resubmission reported
+  as a first attempt. Both now read the store's own count for a keyed
+  action; without a key, unaffected, since there is no cross-submission
+  identity to count against.
+
+### Changed
+- `EnvironmentalContext.auto_notify_emergency` is now
+  `should_notify_emergency`, attribute and `to_dict()` key. The old name
+  implied the object notified somebody; it is a derived boolean saying
+  whether the risk level warrants notification. **Breaking.**
+- `register_expert()`, `register_handler()`,
+  `register_controlled_handler()` and `register_analyzer()` refuse a
+  duplicate instead of replacing it silently, which was almost always two
+  different things unintentionally sharing one name. **Breaking.**
+  `register_agent()` still replaces - that is how a `StubDomainAgent`
+  gives way to the real implementation - but now logs a warning when what
+  it replaced was not a stub.
+- Empty or whitespace-only agent domains, expert names and action types
+  are refused at registration.
+- `PrivateMemory.write()` stores a deep copy, so mutating the object you
+  passed in no longer changes what was stored without an audit entry;
+  `clear()` now records an audit entry too.
+- `UniversalMemory` hands the `EthicalFilter` its own copy, so an
+  analyzer that mutates what it is given cannot reach stored memory.
+- Timeouts and durations reject `NaN` and infinity everywhere, through a
+  single `validate_duration_seconds()`; `RetryPolicy.max_attempts`
+  rejects fractions and booleans.
+- An `Action` carrying an `idempotency_key` must have a
+  JSON-serializable payload: a `repr()` is neither stable nor unique
+  enough to detect a reused key.
+- `_verify_terminals()` reads a single module-level `_TERMINAL_BY_START`
+  table; a cancelled broadcast and a cancelled handler close their trace
+  boundaries as cancellations rather than failures.
+- `run_pipeline()` populates the new additive `StageOutcome` fields. Its
+  control flow, its trace events and every pre-existing field are
+  unchanged.
+- Documented contracts that were true but unwritten: transitioning an
+  unknown key in an `IdempotencyStore`, or releasing an unknown `run_id`
+  from `ExecutionControlRegistry`, is a silent no-op rather than an
+  error. Both are now stated on the public `Protocol` and on the concrete
+  methods, and fixed by tests, so a later change to either has to be a
+  decision instead of a drift. No behaviour changed.
+- `docs/api_reference.md` covers every name in `sett.__all__`. Twelve had
+  no mention at all - the cancellation views, the idempotency types,
+  `action_fingerprint()`, the retry classification - and the four
+  lifecycle exceptions had no attribute tables. The concurrency section
+  now also names `ExecutionControlRegistry` and
+  `InMemoryIdempotencyStore`, which hold their own locks, and its
+  description of the registry says what the implementation does: the
+  parent relation is owned by `ExecutionContext`, and the registry keeps
+  a derived children index over it as a lookup accelerator. A guard test
+  keeps the document and `__all__` from drifting apart again.
+- Every public class, method and function in the package carries a
+  docstring, and every public `__init__` declares `-> None`. Dozens of
+  getters, factories and constructors had neither. A guard test enforces
+  both, for the reason every other guard here exists: a list fixed by
+  hand once refills the same way it filled the first time.
+- `docs/SETT_Conventions_v2.md` is now `docs/SETT_Conventions.md`. No
+  version of SETT has been published yet, so nobody outside this
+  project has ever linked to the `_v2` name - there is no external
+  reader for whom a `v1` ever existed. Keeping the suffix would only
+  invite the question of where that `v1` is. Every in-repo reference
+  (code comments, docstrings, tests) was updated to the new name; the
+  older `[0.11.0]` and `[0.7.0]` entries below still say
+  `SETT_Conventions_v2.md` because that was its real name when those
+  versions were written, and honest history doesn't get edited after
+  the fact (Convention #16).
+
+### Removed
+- The per-version `MIGRATION_v*.md` guide, and the packaging logic that
+  shipped the current one while excluding superseded ones. No version of
+  SETT has been published yet, so there is no adopter for a guide to
+  serve and no obligatory convention requiring one. The release archive
+  now excludes `MIGRATION_*.md` unconditionally, whatever version it
+  claims to document. Revisit this only if the project gains real
+  external adopters who need one; until then, this CHANGELOG is the
+  record of what changed and why.
+
+### Compatibility
+- Two breaking changes, both listed above: the `should_notify_emergency`
+  rename and the duplicate-registration guards.
+- Everything else is additive, or a stricter refusal of input that was
+  already invalid. Every new dataclass field is appended and defaults to
+  `None`, so positional construction and equality of values written the
+  previous way are unaffected.
+- `process()`, `run_pipeline()` and `submit()` were deliberately NOT
+  rewired to delegate to their controlled counterparts. That conversion
+  belongs to a version where the new path already has a release behind
+  it.
+- Without a control, every checkpoint added at a boundary is unreachable:
+  `current_execution_control()` returns `None` outside `lifecycle_scope()`,
+  which only the controlled entry points enter.
+- The 340 tests of v0.11.0 pass unmodified.
+
+### Known limitations
+- SETT cannot cancel an arbitrary non-cooperative Python handler. Three
+  levels of guarantee are documented: cooperative code, a provider given
+  the remaining time, and untrusted code that belongs in an isolated
+  process.
+- Exactly-once is not offered and not achievable against an external
+  system. An in-memory idempotency store says nothing about anything that
+  happened before the current process started, and says so in its own
+  docstring.
+- `bound_provider_error_message()` caps the length of a provider's error
+  text; it does not redact it. Writing a redactor for arbitrary
+  third-party text produces confidence rather than safety. Where a
+  provider message must not appear publicly at all, raise a SETT error
+  and keep the original as `__cause__`.
+- The `timeout` forwarding of the SDK-backed adapters is exercised
+  against stubs, which accept any keyword argument. `OllamaAdapter` and
+  `ElevenLabsTTSAdapter` speak plain HTTP and are verified end to end.
+- `ExecutionResult.value` is a reference, not a snapshot. The dataclass
+  is frozen, which in Python means its fields cannot be reassigned and
+  says nothing about the object a field points at: whoever else holds a
+  mutable value can still change it. Same trade-off `Action` makes, and
+  stated for the same reason - what SETT guarantees is that it will not
+  change what it handed you, not that nobody can. Code needing a true
+  snapshot takes its own `deepcopy()`.
+- The public namespace of the submodules has no formal policy yet. Thirty
+  five names without a leading underscore live in `sett.*` submodules
+  without being in `sett.__all__`, and the question of which of those are
+  supported API and which are internal detail belongs to the v1.0 freeze,
+  not here. Deciding it now would freeze a boundary nobody has designed.
+  Until then, treat `sett.__all__` as the supported surface and a
+  submodule name as reachable but unfrozen.
+
+  `ENV_CONTEXT_PREFIX` and `canonicalize_for_keyword_match()` are the
+  concrete case, and are worth naming because this release calls both
+  "public". What that means here is what they are: named, importable and
+  documented in `docs/api_reference.md` with their real import paths,
+  rather than literals buried in a module. It does not mean they were
+  added to `sett.__all__` - promoting them to the root namespace would be
+  settling one corner of the policy above ahead of the rest of it, which
+  is exactly the sort of piecemeal decision the freeze exists to avoid.
+  Whether they belong at the root is one of the questions v1.0 answers,
+  with these two as the worked example.
+- The naming convention for the runtime and configuration primitives this
+  release introduces - `ExecutionControl`, `ExecutionControlRegistry`,
+  `LifecyclePolicy`, `RetryPolicy`, `ExecutionState`/`Result`/`Status` -
+  is not yet ratified in `docs/SETT_Conventions.md`. They violate nothing
+  in Conventions #22 and #23; whether the `-Policy`, `-Registry` and
+  `-Control` suffixes should become a named category with rules of its
+  own is an open question for a later conventions update.
+- Canonicalization does not defeat homoglyphs. Cyrillic `а` is a
+  different letter from Latin `a`, not a different spelling of it, so
+  `harm` written with one still misses the keyword. A hand-maintained
+  confusables table is not offered, because an incomplete one produces
+  confidence rather than safety. The generic keyword matcher is
+  fail-honest scaffolding for an application that has registered no
+  analyzer of its own; what guards a critical action is a domain
+  analyzer registered with `register_analyzer()`, together with
+  `SETTExecutor` resolving handlers by exact `action_type` and failing
+  closed without one.
+
 ## [0.11.0] - 2026-07-29
 
 ### Added

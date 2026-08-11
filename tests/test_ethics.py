@@ -25,6 +25,8 @@ from sett import (
     RiskProfile,
     EnvironmentalContext,
     SETTEthicalFilterRejectedError,
+    SETTMemoryAccessDeniedError,
+    SETTValidationError,
     default_ruleset,
     FilterVerdict,
 )
@@ -97,6 +99,63 @@ class TestRiskProfile:
         assert abs(p2.influence_vulnerability - 0.6) < 0.001
         assert abs(p2.collateral_damage_potential - 0.2) < 0.001
 
+    def test_timestamp_survives_the_round_trip(self):
+        """F12 regression (defensive audit #2).
+
+        to_dict() always serializes `timestamp`, but from_dict() used to
+        ignore it and mint a fresh one instead: every roundtrip through
+        PrivateMemory silently replaced the moment this assessment was
+        actually made.
+        """
+        p = RiskProfile(emotional_instability=0.4)
+        d = p.to_dict()
+        p2 = RiskProfile.from_dict(d)
+        assert p2.timestamp == p.timestamp
+
+    def test_weights_that_do_not_sum_to_one_are_rejected(self):
+        """F13 regression (defensive audit #2): the composite_score
+        invariant (always in [0.0, 1.0]) depends on the weights summing to
+        1.0. An unvalidated custom weighting could silently break it.
+        """
+        with pytest.raises(SETTValidationError):
+            RiskProfile(
+                emotional_instability=0.5,
+                _weights={
+                    "emotional_instability": 0.9,
+                    "influence_vulnerability": 0.9,
+                    "collateral_damage_potential": 0.9,
+                },
+            )
+
+    def test_a_negative_weight_is_rejected(self):
+        with pytest.raises(SETTValidationError):
+            RiskProfile(
+                _weights={
+                    "emotional_instability": 1.3,
+                    "influence_vulnerability": -0.3,
+                    "collateral_damage_potential": 0.0,
+                },
+            )
+
+    def test_weights_cannot_be_mutated_after_construction(self):
+        """Blocking item assignment closes the other half of F13: even a
+        validated set of weights must not drift after construction.
+        """
+        p = RiskProfile(emotional_instability=0.5)
+        with pytest.raises(TypeError):
+            p._weights["emotional_instability"] = 0.99
+
+    def test_a_risk_profile_survives_deepcopy(self):
+        """The frozen `_weights` mapping must not break deepcopy(), which
+        PrivateMemory.write() and UniversalMemory storage both rely on.
+        """
+        import copy
+
+        p = RiskProfile(emotional_instability=0.7)
+        p2 = copy.deepcopy(p)
+        assert p2 is not p
+        assert p2.composite_score == p.composite_score
+
 
 # ── RiskLevel tests ───────────────────────────────────────────────────────────
 
@@ -145,18 +204,21 @@ class TestEnvironmentalContext:
         assert ctx.location_id == "zone_a"
         assert not ctx.requires_response
 
-    def test_critical_context_auto_notify_emergency(self):
+    def test_critical_context_should_notify_emergency(self):
+        """F20 (defensive audit #2): renamed from auto_notify_emergency,
+        whose name implied SETT automatically performs the notification.
+        This field is only a recommendation derived from risk_level."""
         ctx = EnvironmentalContext(
             risk_level=RiskLevel.LEVEL_4, location_id="zone"
         )
-        assert ctx.auto_notify_emergency is True
+        assert ctx.should_notify_emergency is True
         assert ctx.requires_evacuation is True
 
-    def test_non_critical_does_not_auto_notify(self):
+    def test_non_critical_does_not_recommend_notify(self):
         ctx = EnvironmentalContext(
             risk_level=RiskLevel.LEVEL_2, location_id="zone"
         )
-        assert ctx.auto_notify_emergency is False
+        assert ctx.should_notify_emergency is False
         assert ctx.requires_evacuation is False
         assert ctx.requires_response is True
 
@@ -187,6 +249,21 @@ class TestEnvironmentalContext:
         assert ctx2.risk_level == RiskLevel.LEVEL_3
         assert ctx2.location_id == "store_42"
         assert ctx2.source_domain == "health"
+
+    def test_timestamp_survives_the_round_trip(self):
+        """F03 regression (defensive audit #2).
+
+        to_dict() always serializes `timestamp`, but from_dict() used to
+        ignore it and mint a fresh one instead: every read through
+        UniversalMemory silently replaced the real publish time with
+        whatever moment it happened to be read.
+        """
+        ctx = EnvironmentalContext(
+            risk_level=RiskLevel.LEVEL_1, location_id="zone"
+        )
+        d = ctx.to_dict()
+        ctx2 = EnvironmentalContext.from_dict(d)
+        assert ctx2.timestamp == ctx.timestamp
 
     def test_does_not_contain_personal_data_in_dict(self):
         """
@@ -433,7 +510,7 @@ class TestThreeLayerIntegration:
         ctx_read = shared_mem.read_environmental_context("store_42")
         assert ctx_read is not None
         assert ctx_read.risk_level == RiskLevel.LEVEL_4
-        assert ctx_read.auto_notify_emergency is True
+        assert ctx_read.should_notify_emergency is True
 
         # Instance B's filter with this context rejects normally-safe actions
         f_b = EthicalFilter()
@@ -495,3 +572,206 @@ class TestThreeLayerIntegration:
             assert key not in health_result, (
                 f"Privacy violation: '{key}' found in universal memory"
             )
+
+    def test_a_careless_expert_cannot_publish_a_raw_risk_profile(self):
+        """F02 regression (defensive audit #2).
+
+        The test above only proves a *cooperative* Expert - one that
+        remembers to strip everything sensitive before returning - keeps
+        the boundary. Before this fix, nothing in UniversalMemory.update()
+        actually enforced it: an Expert that simply forgot, or one built
+        adversarially, could publish a raw RiskProfile instance and it
+        would be accepted and stored like any other value.
+        """
+        from sett import SETTOrchestrator, SETTAgent
+
+        class CarelessAgent(SETTAgent):
+            def __init__(self):
+                super().__init__("CarelessAgent", "careless")
+
+            def process(self, input_data):
+                profile = RiskProfile(
+                    emotional_instability=0.9,
+                    influence_vulnerability=0.7,
+                    collateral_damage_potential=0.8,
+                )
+                # A mistake, not malice: the whole profile object ends up
+                # nested inside the published result.
+                result = {"alert": True, "assessment": {"profile": profile}}
+                self._publish_to_universal(result)
+                return result
+
+        o = SETTOrchestrator()
+        o.register_agent(CarelessAgent())
+
+        with pytest.raises(SETTMemoryAccessDeniedError):
+            o.process({}, domain="careless")
+
+        universal = o.read_universal_memory()
+        assert "careless" not in universal
+
+    def test_an_analyzer_that_mutates_context_cannot_taint_stored_memory(self):
+        """F10 regression (defensive audit #2).
+
+        UniversalMemory.update() used to hand the filter a shallow copy
+        (``dict(result)``) of the published result: nested dicts/lists
+        were shared with the caller's own ``result``. An analyzer that
+        mutated something it was given during evaluation silently tainted
+        what later got stored, with no signal it had happened.
+        """
+        from sett import SETTOrchestrator, SETTAgent
+        from sett.ethics_ruler.ethic_kernel.context_analyzer import (
+            ContextAnalyzer,
+        )
+
+        class MutatingAnalyzer(ContextAnalyzer):
+            def analyze(
+                self,
+                action,
+                context,
+                emotional_state="unknown",
+                risk_profile=None,
+                environmental_context=None,
+            ):
+                nested = context.get("nested")
+                if isinstance(nested, dict):
+                    nested["tampered"] = True
+                return super().analyze(
+                    action, context, emotional_state, risk_profile,
+                    environmental_context,
+                )
+
+        class TaintedAgent(SETTAgent):
+            def __init__(self):
+                super().__init__("TaintedAgent", "tainted")
+
+            def process(self, input_data):
+                result = {"nested": {"value": 1}}
+                self._publish_to_universal(result)
+                return result
+
+        ethical_filter = EthicalFilter()
+        ethical_filter.register_analyzer("memory_write", MutatingAnalyzer())
+        o = SETTOrchestrator(ethical_filter=ethical_filter)
+        o.register_agent(TaintedAgent())
+        o.process({}, domain="tainted")
+
+        stored = o.read_universal_memory()["tainted"]
+        assert "tampered" not in stored["nested"]
+
+    def test_reserved_pillar_keys_cannot_be_published_even_without_the_object(
+        self,
+    ):
+        """The same boundary, reached without ever constructing a RiskProfile.
+
+        A serialized dict with the right field names is just as much a
+        leak as the object itself - RiskProfile.to_dict() produces exactly
+        this shape.
+        """
+        from sett import SETTOrchestrator, SETTAgent
+
+        class SerializingAgent(SETTAgent):
+            def __init__(self):
+                super().__init__("SerializingAgent", "serializing")
+
+            def process(self, input_data):
+                result = {
+                    "nested": {"emotional_instability": 0.9},
+                }
+                self._publish_to_universal(result)
+                return result
+
+        o = SETTOrchestrator()
+        o.register_agent(SerializingAgent())
+
+        with pytest.raises(SETTMemoryAccessDeniedError):
+            o.process({}, domain="serializing")
+
+
+# ─────────────────────────────────────────────────────────────────────
+# AUD4-ROB-01: Unicode canonicalization of the Layer 1 keyword matcher
+# ─────────────────────────────────────────────────────────────────────
+
+from sett.ethics_ruler.ethic_kernel.context_analyzer import (  # noqa: E402
+    ContextAnalyzer,
+    canonicalize_for_keyword_match,
+)
+
+
+class TestKeywordCanonicalizationPolicy:
+    """
+    The policy, stated as tests: invisible characters and compatibility
+    forms are folded away before keywords are matched. Homoglyphs are
+    not, and the framework says so rather than implying otherwise.
+    """
+
+    @pytest.mark.parametrize(
+        "written, canonical",
+        [
+            ("ha​rm", "harm"),          # zero-width space
+            ("ha‌rm", "harm"),          # zero-width non-joiner
+            ("emer‍gency", "emergency"),  # zero-width joiner
+            ("de­lete", "delete"),      # soft hyphen
+            ("‮harm‬", "harm"),    # bidi overrides
+            ("ｄｅｌｅｔｅ", "delete"),  # fullwidth
+            ("DELETE", "delete"),
+            ("Emergency", "emergency"),
+            ("STRASSE", "strasse"),          # casefold, not lower()
+            ("harm", "harm"),                # already canonical
+        ],
+    )
+    def test_canonical_forms(self, written, canonical):
+        assert canonicalize_for_keyword_match(written) == canonical
+
+    def test_homoglyphs_are_not_folded_and_that_is_deliberate(self):
+        """
+        Cyrillic 'а' is a different letter, not a different spelling.
+        NFKC correctly leaves it alone, so this stays outside what
+        canonicalization can reach - documented instead of papered over
+        with an incomplete homoglyph table.
+        """
+        assert canonicalize_for_keyword_match("hаrm") != "harm"
+
+
+class TestLayer1ScoresInvisibleSpellingsTheSameWay:
+
+    ANALYZER = ContextAnalyzer()
+
+    def _score(self, action, context=None):
+        return self.ANALYZER.analyze(action, context or {}).risk_score
+
+    @pytest.mark.parametrize(
+        "obfuscated, plain",
+        [
+            ("ha​rm the user", "harm the user"),
+            ("emer​gency call", "emergency call"),
+            ("de­lete everything", "delete everything"),
+            ("s​end the file", "send the file"),
+            ("ｓｅｎｄ the file", "send the file"),
+        ],
+    )
+    def test_obfuscated_action_scores_like_the_plain_one(self, obfuscated, plain):
+        assert self._score(obfuscated) == self._score(plain)
+
+    @pytest.mark.parametrize("field", ["proposed_action", "action_type"])
+    def test_structured_fields_are_canonicalized_too(self, field):
+        obfuscated = self._score("memory write", {field: "de­lete_all"})
+        plain = self._score("memory write", {field: "delete_all"})
+        assert obfuscated == plain
+        assert plain > self._score("memory write", {field: "read_one"})
+
+    def test_consequences_are_listed_for_invisible_spellings_too(self):
+        consequences = self.ANALYZER.analyze("emer​gency call", {}).consequences
+        assert any("Emergency services" in c for c in consequences)
+
+    def test_emotional_state_survives_an_invisible_character(self):
+        obfuscated = self._score("say hello", {})
+        analyzer = self.ANALYZER
+        with_zwsp = analyzer.analyze(
+            "say hello", {}, emotional_state="cri​sis"
+        ).risk_score
+        with_plain = analyzer.analyze(
+            "say hello", {}, emotional_state="crisis"
+        ).risk_score
+        assert with_zwsp == with_plain
+        assert with_plain > obfuscated

@@ -117,6 +117,25 @@ class TestElevenLabsTTSAdapterErrorHandling:
         assert "401" in str(exc_info.value)
 
     @patch("sett.services_tts_stt.elevenlabs.requests.post")
+    def test_an_oversized_http_error_body_is_bounded(self, mock_post):
+        """F29 regression (defensive audit #2): an HTTP error body from
+        the provider used to be embedded up to 500 characters with no
+        marker that it had been cut. It is now bounded to the same
+        limit as an adapter exception message, with a visible marker."""
+        from sett.exceptions import DEFAULT_PROVIDER_ERROR_MAX_LENGTH
+
+        huge_body = "e" * (DEFAULT_PROVIDER_ERROR_MAX_LENGTH + 300)
+        mock_post.return_value = _fake_response(status_code=500, text=huge_body)
+        adapter = ElevenLabsTTSAdapter(api_key="k")
+
+        with pytest.raises(SETTServiceAdapterError) as exc_info:
+            adapter.synthesize("hello")
+
+        message = str(exc_info.value)
+        assert len(message) < len(huge_body)
+        assert "[truncated]" in message
+
+    @patch("sett.services_tts_stt.elevenlabs.requests.post")
     def test_network_error_raises_sett_service_adapter_error(self, mock_post):
         import requests as real_requests
         mock_post.side_effect = real_requests.exceptions.ConnectionError("down")

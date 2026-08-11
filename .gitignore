@@ -29,6 +29,9 @@ build/
 
 # Testing
 .pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.tox/
 .coverage
 htmlcov/
 

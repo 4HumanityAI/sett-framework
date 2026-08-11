@@ -44,6 +44,15 @@ class TTSBase(ABC):
 
             def synthesize(self, text, **kwargs):
                 return my_api.speak(text)
+    
+    Two reserved keyword arguments (v0.12.0)
+    ----------------------------------------
+    ``timeout`` (seconds) and ``cancellation_token`` are reserved by the
+    framework inside ``**kwargs``. Adapters sit outside the Agent/Expert
+    tree and never receive an ambient control, so these two names are how
+    a run's remaining time and its cancellation reach a provider call.
+    Unpack them with ``pop_lifecycle_kwargs(kwargs)`` from
+    ``sett.core_ruler.lifecycle``; see ``LLMBase`` for a worked example.
     """
 
     @abstractmethod
@@ -85,6 +94,15 @@ class STTBase(ABC):
         class MySTTAdapter(STTBase):
             def transcribe(self, audio, **kwargs):
                 return my_api.transcribe(audio)
+    
+    Two reserved keyword arguments (v0.12.0)
+    ----------------------------------------
+    ``timeout`` (seconds) and ``cancellation_token`` are reserved by the
+    framework inside ``**kwargs``. Adapters sit outside the Agent/Expert
+    tree and never receive an ambient control, so these two names are how
+    a run's remaining time and its cancellation reach a provider call.
+    Unpack them with ``pop_lifecycle_kwargs(kwargs)`` from
+    ``sett.core_ruler.lifecycle``; see ``LLMBase`` for a worked example.
     """
 
     @abstractmethod

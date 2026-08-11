@@ -18,15 +18,29 @@ from sett.services_sentiment.base import SentimentResult, SentenceSentiment
 
 def _fake_google_cloud_sys_modules(submodule_name: str, submodule_mock: MagicMock) -> dict:
     """Same construction as test_google_tts_stt_adapters.py: see that
-    file for why the parent attribute must be set explicitly."""
+    file for why the parent attribute must be set explicitly.
+
+    Also registers a fake google.oauth2.service_account (F18 fix): the
+    adapter now loads credentials explicitly from a file via
+    google.oauth2.service_account.Credentials.from_service_account_file()
+    instead of mutating os.environ, so that import must resolve too.
+    """
     google_cloud_mock = MagicMock(name="google.cloud")
     setattr(google_cloud_mock, submodule_name, submodule_mock)
+
+    service_account_mock = MagicMock(name="google.oauth2.service_account")
+    oauth2_mock = MagicMock(name="google.oauth2")
+    oauth2_mock.service_account = service_account_mock
+
     google_mock = MagicMock(name="google")
     google_mock.cloud = google_cloud_mock
+    google_mock.oauth2 = oauth2_mock
     return {
         "google": google_mock,
         "google.cloud": google_cloud_mock,
         f"google.cloud.{submodule_name}": submodule_mock,
+        "google.oauth2": oauth2_mock,
+        "google.oauth2.service_account": service_account_mock,
     }
 
 
@@ -124,22 +138,80 @@ class TestGoogleSentimentAdapterAnalyze:
                 content="hola", type_="PLAIN_TEXT"
             )
 
-    def test_missing_credentials_raises_sett_service_adapter_error(self, monkeypatch):
+    def test_missing_credentials_surface_as_a_framework_error(self, monkeypatch):
+        """The client library decides; SETT only retypes its refusal.
+
+        This used to assert that an unset GOOGLE_APPLICATION_CREDENTIALS
+        was itself the error. That encoded a defect: Application Default
+        Credentials resolve from five sources and the environment variable
+        is one, so the check refused four valid setups - including GKE
+        workload identity, where the only way to satisfy it was the
+        service account key file Google recommends avoiding.
+        """
+        monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
+        fake_module, _ = _fake_language_v1_module()
+
+        class DefaultCredentialsError(Exception):
+            pass
+
+        fake_module.LanguageServiceClient.side_effect = DefaultCredentialsError(
+            "Your default credentials were not found."
+        )
+        with patch.dict(sys.modules, _fake_google_cloud_sys_modules("language_v1", fake_module)):
+            from sett.services_sentiment.google import GoogleSentimentAdapter
+            with pytest.raises(SETTServiceAdapterError) as excinfo:
+                GoogleSentimentAdapter()
+        assert "credentials" in str(excinfo.value).lower()
+
+    def test_ambient_credentials_without_the_env_var_are_accepted(
+        self, monkeypatch
+    ):
+        """The regression itself: metadata / workload identity must work.
+
+        With no environment variable and no explicit path, the client
+        constructs successfully because the environment supplied
+        credentials some other way. SETT must not stand in front of that.
+        """
         monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
         fake_module, _ = _fake_language_v1_module()
         with patch.dict(sys.modules, _fake_google_cloud_sys_modules("language_v1", fake_module)):
             from sett.services_sentiment.google import GoogleSentimentAdapter
-            with pytest.raises(SETTServiceAdapterError):
-                GoogleSentimentAdapter()
+            GoogleSentimentAdapter()
+            fake_module.LanguageServiceClient.assert_called_once_with(credentials=None)
 
-    def test_credentials_path_argument_sets_env_var(self, monkeypatch):
+    def test_credentials_path_argument_builds_explicit_credentials(
+        self, monkeypatch
+    ):
+        """F18 regression (defensive audit #2).
+
+        credentials_path used to be applied by mutating the process-wide
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] - global state that
+        a second adapter instance configured with a different path would
+        silently overwrite for the first. It is now loaded into an
+        explicit Credentials object and passed directly to the client
+        constructor, and the environment is never touched.
+        """
         monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
         fake_module, _ = _fake_language_v1_module()
-        with patch.dict(sys.modules, _fake_google_cloud_sys_modules("language_v1", fake_module)):
+        modules = _fake_google_cloud_sys_modules("language_v1", fake_module)
+        fake_credentials = object()
+        modules[
+            "google.oauth2.service_account"
+        ].Credentials.from_service_account_file.return_value = fake_credentials
+        with patch.dict(sys.modules, modules):
             from sett.services_sentiment.google import GoogleSentimentAdapter
             GoogleSentimentAdapter(credentials_path="/explicit/creds.json")
+
+            modules[
+                "google.oauth2.service_account"
+            ].Credentials.from_service_account_file.assert_called_once_with(
+                "/explicit/creds.json"
+            )
+            fake_module.LanguageServiceClient.assert_called_once_with(
+                credentials=fake_credentials
+            )
             import os
-            assert os.environ["GOOGLE_APPLICATION_CREDENTIALS"] == "/explicit/creds.json"
+            assert "GOOGLE_APPLICATION_CREDENTIALS" not in os.environ
 
     def test_analyze_wraps_client_error(self, fake_google_credentials):
         fake_module, client = _fake_language_v1_module()

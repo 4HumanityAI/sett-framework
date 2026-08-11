@@ -21,6 +21,13 @@ from sett.core_ruler.execution_context import (
     current_trace_cause_id,
     execution_scope,
 )
+from sett.core_ruler.lifecycle import (
+    derive_control_for,
+    lifecycle_scope,
+    stop_cause_id,
+    stop_reason_code,
+)
+from sett.exceptions import SETTCancelledError, SETTTimeoutError
 
 if TYPE_CHECKING:
     from sett.audit_ruler.trace import TraceRecorder
@@ -50,7 +57,7 @@ class SETTExpert(ABC):
                 return {"heart_rate_status": status, "bpm": bpm}
     """
 
-    def __init__(self, name: str):
+    def __init__(self, name: str) -> None:
         """
         Args:
             name: A unique name for this expert within its agent.
@@ -109,35 +116,98 @@ class SETTExpert(ABC):
             status="started",
             cause_id=current_trace_cause_id(),
         )
+        # A control for this expert's own node, when lifecycle management
+        # is in use. Nothing here changes for a caller who never asked for
+        # it: without an ambient control this is None and every checkpoint
+        # below is skipped, which is what lets the boundary be instrumented
+        # once without any existing expert subclass being aware of it.
+        control = derive_control_for(child)
         with execution_scope(child, started.event_id):
-            try:
-                result = implementation(context)
-            except Exception as error:
-                failed_event = recorder.record(
-                    child,
-                    kind="expert.failed",
-                    component_type="expert",
-                    component_name=self.name,
-                    status="failed",
-                    cause_id=started.event_id,
-                    reason_codes=("component.exception",),
-                    attributes={"error_type": type(error).__name__},
-                )
-                try:
-                    error.trace_event_id = failed_event.event_id
-                except (AttributeError, TypeError):
-                    pass
-                raise
-            recorder.record(
+            return self._resolve_within_boundary(
+                implementation, context, recorder, child, started, control
+            )
+
+    def _resolve_within_boundary(
+        self,
+        implementation: Callable[[dict[str, Any]], dict[str, Any]],
+        context: dict[str, Any],
+        recorder: TraceRecorder,
+        child: Any,
+        started: Any,
+        control: Any,
+    ) -> dict[str, Any]:
+        """Resolve, closing the trace boundary whatever happens.
+
+        Entering the control is inside this try on purpose: a control whose
+        entry checkpoint fails - cancellation arriving in the window
+        between ``expert.started`` being recorded and the expert actually
+        starting - raises before the body runs, and an ``expert.started``
+        with no terminal is the unclosed boundary the recorder rejects.
+        """
+        try:
+            if control is None:
+                result = self._invoke(implementation, context, None)
+            else:
+                with control, lifecycle_scope(control):
+                    result = self._invoke(implementation, context, control)
+        except (SETTCancelledError, SETTTimeoutError) as error:
+            cancelled = isinstance(error, SETTCancelledError)
+            stopped_event = recorder.record(
                 child,
-                kind="expert.completed",
+                kind="expert.cancelled" if cancelled else "expert.timed_out",
                 component_type="expert",
                 component_name=self.name,
-                status="completed",
-                cause_id=started.event_id,
-                attributes={"result_type": type(result).__name__},
+                status="cancelled" if cancelled else "timed_out",
+                cause_id=stop_cause_id(
+                    recorder, child.trace_id, started.event_id, error
+                ),
+                reason_codes=(stop_reason_code(error),),
             )
-            return result
+            try:
+                error.trace_event_id = stopped_event.event_id
+            except (AttributeError, TypeError):
+                pass
+            raise
+        except Exception as error:
+            failed_event = recorder.record(
+                child,
+                kind="expert.failed",
+                component_type="expert",
+                component_name=self.name,
+                status="failed",
+                cause_id=started.event_id,
+                reason_codes=("component.exception",),
+                attributes={"error_type": type(error).__name__},
+            )
+            try:
+                error.trace_event_id = failed_event.event_id
+            except (AttributeError, TypeError):
+                pass
+            raise
+        recorder.record(
+            child,
+            kind="expert.completed",
+            component_type="expert",
+            component_name=self.name,
+            status="completed",
+            cause_id=started.event_id,
+            attributes={"result_type": type(result).__name__},
+        )
+        return result
+
+    @staticmethod
+    def _invoke(
+        implementation: Callable[[dict[str, Any]], dict[str, Any]],
+        context: dict[str, Any],
+        control: Any,
+    ) -> dict[str, Any]:
+        """Run the expert's own resolve(), observing the control around it."""
+        if control is not None:
+            control.checkpoint()
+        result = implementation(context)
+        if control is not None:
+            control.checkpoint()
+        return result
 
     @property
     def _execution_context(self):

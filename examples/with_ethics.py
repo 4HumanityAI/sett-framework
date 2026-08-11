@@ -31,9 +31,6 @@ from sett import (
     SETTAgent,
     SETTExpert,
     EthicalFilter,
-    EthicalRuleset,
-    EthicalRule,
-    HarmCategory,
     SETTEthicalFilterRejectedError,
     default_ruleset,
 )

@@ -88,14 +88,50 @@ def test_sett_validation_error_is_caught_as_value_error():
 
 def test_other_data_carriers_are_not_touched_by_this_change():
     """
-    Explicitly not extended per the audit decision: Action and
-    BiometricReading still accept any payload without validation.
+    Explicitly not extended per the audit decision: Action still accepts
+    any payload without validation, and BiometricReading still accepts
+    any physiologically nonsensical *number* without validation - -999
+    bpm is a real, finite int, so it is out of range but not mistyped.
     Documents the decision as a passing test, not just a comment.
+
+    BiometricReading's type/finiteness checks (F14, added later) are a
+    narrower, separate guarantee: see test_biometric_reading_rejects_a
+    _mistyped_vital_sign below.
     """
     from sett import Action, BiometricReading
 
     Action(action_type="anything", payload={"whatever": "goes"})
     BiometricReading(heart_rate_bpm=-999)  # nonsensical, not validated
+
+
+def test_biometric_reading_rejects_a_mistyped_vital_sign():
+    """F14 regression (defensive audit #2).
+
+    Before this fix, a mistyped vital sign (a string where a number was
+    expected) constructed successfully and only failed later, with a
+    bare TypeError from inside is_critical's `>`/`<` comparisons - not
+    the SETTValidationError this framework raises everywhere else for
+    invalid data, and raised far from the value that actually caused it.
+    """
+    from sett import BiometricReading
+
+    with pytest.raises(SETTValidationError):
+        BiometricReading(heart_rate_bpm="fast")
+    with pytest.raises(SETTValidationError):
+        BiometricReading(temperature_celsius=float("nan"))
+
+
+def test_risk_profile_rejects_a_mistyped_pillar_instead_of_a_bare_typeerror():
+    """F15 regression (defensive audit #2).
+
+    A string pillar value used to raise a bare TypeError from the `<=`
+    comparison in __post_init__ rather than SETTValidationError, and
+    `bool` (a real int subclass) was silently accepted as 0.0/1.0.
+    """
+    with pytest.raises(SETTValidationError):
+        RiskProfile(emotional_instability="high")
+    with pytest.raises(SETTValidationError):
+        RiskProfile(influence_vulnerability=True)
 
 
 # ── Point 4: PrivateMemory defensive copies ──────────────────────────────────
@@ -123,6 +159,39 @@ def test_private_memory_get_all_returns_defensive_copy():
     snapshot["new_top_level_key"] = "injected"
 
     assert mem.get_all() == {"data": {"list": [1, 2, 3]}}
+
+
+def test_private_memory_write_stores_a_copy_not_the_callers_reference():
+    """F09 regression (defensive audit #2).
+
+    Before this fix, write() stored the caller's own object. Mutating it
+    after write() returned - without calling write() again - silently
+    changed what PrivateMemory reported as stored, with no new entry in
+    get_history() to show it happened.
+    """
+    mem = PrivateMemory(owner="test_agent")
+    original = {"list": [1, 2, 3]}
+    mem.write("data", original)
+
+    original["list"].append(999)
+    original["injected_key"] = "should not persist"
+
+    assert mem.read("data") == {"list": [1, 2, 3]}
+    history = mem.get_history()
+    assert len(history) == 1
+    assert history[0]["action"] == "write"
+
+
+def test_private_memory_clear_is_recorded_in_history():
+    """F26 regression (defensive audit #2): clear() must not be silent."""
+    mem = PrivateMemory(owner="test_agent")
+    mem.write("data", {"value": 1})
+
+    mem.clear()
+
+    assert mem.get_all() == {}
+    history = mem.get_history()
+    assert [entry["action"] for entry in history] == ["write", "clear"]
 
 
 # ── Point 5: PhrasingExpert override warning ─────────────────────────────────

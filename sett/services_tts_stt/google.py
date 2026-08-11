@@ -18,9 +18,13 @@ intentionally not carried over here.
 Requires: pip install sett-framework[google-tts-stt]
 """
 from __future__ import annotations
-import os
 from typing import Any
 
+from sett.core_ruler.lifecycle import pop_lifecycle_kwargs
+from sett.services_google_auth import (
+    google_credentials_from_path,
+    build_google_client,
+)
 from sett.services_tts_stt.base import TTSBase, STTBase
 from sett.exceptions import SETTServiceAdapterError
 
@@ -50,9 +54,12 @@ class GoogleTTSAdapter(TTSBase):
             language_code: BCP-47 language tag for the synthesized voice.
             voice_gender: One of "NEUTRAL", "FEMALE", "MALE".
             credentials_path: Path to a Google Cloud service account
-                JSON key. Falls back to the GOOGLE_APPLICATION_CREDENTIALS
-                environment variable (standard Google Cloud client
-                behavior) if not given.
+                JSON key, scoped to this instance only. When omitted, the
+                client resolves Application Default Credentials on its
+                own, in full: GOOGLE_APPLICATION_CREDENTIALS, a gcloud
+                login, GCE/GKE metadata or workload identity all apply,
+                because this adapter does not second-guess which one is
+                in use.
         """
         try:
             from google.cloud import texttospeech
@@ -64,25 +71,25 @@ class GoogleTTSAdapter(TTSBase):
                 "pip install sett-framework[google-tts-stt]"
             )
 
-        if credentials_path:
-            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_path
-        if not os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
-            raise SETTServiceAdapterError(
-                "Google Cloud credentials not found. Pass credentials_path= "
-                "or set the GOOGLE_APPLICATION_CREDENTIALS environment "
-                "variable to a service account JSON key."
-            )
+        credentials = google_credentials_from_path(credentials_path)
 
         self._language_code = language_code
         self._voice_gender = voice_gender.upper()
-        self._client = self._texttospeech.TextToSpeechClient()
+        self._client = build_google_client(
+            self._texttospeech.TextToSpeechClient,
+            credentials=credentials,
+            adapter_name="GoogleTTSAdapter",
+        )
 
     @property
     def audio_format(self) -> str:
+        """The container this adapter returns audio in."""
         return "mp3"
 
     def synthesize(self, text: str, **kwargs: Any) -> bytes:
         """Synthesize speech audio (MP3 bytes) for the given text."""
+        lifecycle = pop_lifecycle_kwargs(kwargs)
+        lifecycle.throw_if_cancelled()
         try:
             language_code = kwargs.get("language_code", self._language_code)
             gender_name = kwargs.get("voice_gender", self._voice_gender).upper()
@@ -93,6 +100,7 @@ class GoogleTTSAdapter(TTSBase):
             )
 
             response = self._client.synthesize_speech(
+                timeout=lifecycle.effective_timeout(None),
                 input=self._texttospeech.SynthesisInput(text=text),
                 voice=self._texttospeech.VoiceSelectionParams(
                     language_code=language_code,
@@ -145,8 +153,12 @@ class GoogleSTTAdapter(STTBase):
             sample_rate_hertz: Sample rate of the audio that will be
                 passed to transcribe(). Must match the actual audio.
             credentials_path: Path to a Google Cloud service account
-                JSON key. Falls back to GOOGLE_APPLICATION_CREDENTIALS
-                if not given.
+                JSON key, scoped to this instance only. When omitted, the
+                client resolves Application Default Credentials on its
+                own, in full: GOOGLE_APPLICATION_CREDENTIALS, a gcloud
+                login, GCE/GKE metadata or workload identity all apply,
+                because this adapter does not second-guess which one is
+                in use.
         """
         try:
             from google.cloud import speech
@@ -158,21 +170,20 @@ class GoogleSTTAdapter(STTBase):
                 "pip install sett-framework[google-tts-stt]"
             )
 
-        if credentials_path:
-            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_path
-        if not os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
-            raise SETTServiceAdapterError(
-                "Google Cloud credentials not found. Pass credentials_path= "
-                "or set the GOOGLE_APPLICATION_CREDENTIALS environment "
-                "variable to a service account JSON key."
-            )
+        credentials = google_credentials_from_path(credentials_path)
 
         self._language_code = language_code
         self._sample_rate_hertz = sample_rate_hertz
-        self._client = self._speech.SpeechClient()
+        self._client = build_google_client(
+            self._speech.SpeechClient,
+            credentials=credentials,
+            adapter_name="GoogleSTTAdapter",
+        )
 
     def transcribe(self, audio: bytes, **kwargs: Any) -> str:
         """Transcribe LINEAR16 WAV audio bytes to text."""
+        lifecycle = pop_lifecycle_kwargs(kwargs)
+        lifecycle.throw_if_cancelled()
         try:
             language_code = kwargs.get("language_code", self._language_code)
             sample_rate_hertz = kwargs.get(
@@ -180,6 +191,7 @@ class GoogleSTTAdapter(STTBase):
             )
 
             response = self._client.recognize(
+                timeout=lifecycle.effective_timeout(None),
                 config=self._speech.RecognitionConfig(
                     encoding=self._speech.RecognitionConfig.AudioEncoding.LINEAR16,
                     sample_rate_hertz=sample_rate_hertz,

@@ -6,7 +6,9 @@ An agent is a domain specialist composed of multiple experts.
 Each agent:
 - Is specialized in one domain (health, communications, schedule, etc.)
 - Contains one or more SETTExperts that do the actual work
-- Maintains its own PrivateMemory (not accessible from outside)
+- Maintains its own PrivateMemory (not exposed through the public API;
+  isolated by convention, not by a runtime access-control boundary -
+  see PrivateMemory's own docstring, F24 of defensive audit #2)
 - Publishes ONLY the final result to the UniversalMemory
 - Does not communicate directly with other agents
 
@@ -45,7 +47,11 @@ from sett.core_ruler.execution_context import (
     current_trace_cause_id,
 )
 from sett.core_ruler.expert import SETTExpert
-from sett.exceptions import SETTConfigurationError, SETTExpertNotFoundError
+from sett.exceptions import (
+    SETTConfigurationError,
+    SETTExpertNotFoundError,
+    SETTValidationError,
+)
 from sett.memory_ruler.private import PrivateMemory
 
 if TYPE_CHECKING:
@@ -96,7 +102,25 @@ class SETTAgent(ABC):
             name: A human-readable name for this agent (e.g., "HealthAgent").
             domain: The domain key used by the orchestrator to route input to this
                     agent (e.g., "health", "communications", "schedule").
+
+        Raises:
+            SETTValidationError: If name or domain is not a non-empty,
+                non-whitespace string. Checked here (construction time)
+                rather than in the orchestrator's register_agent(), since
+                it's orthogonal to - and must not interfere with -
+                register_agent()'s intentional domain-collision/stub-swap
+                behavior (see register_agent()'s docstring).
         """
+        if not isinstance(name, str) or not name.strip():
+            raise SETTValidationError(
+                "SETTAgent name must be a non-empty string, "
+                f"got {name!r}."
+            )
+        if not isinstance(domain, str) or not domain.strip():
+            raise SETTValidationError(
+                "SETTAgent domain must be a non-empty string, "
+                f"got {domain!r}."
+            )
         self.name = name
         self.domain = domain
         self._private_memory = PrivateMemory(owner=self.name)
@@ -122,8 +146,32 @@ class SETTAgent(ABC):
         Gives the expert access to this agent's private memory.
 
         Args:
-            expert: A SETTExpert instance. Its name must be unique within this agent.
+            expert: A SETTExpert instance. Its name must be unique within
+                this agent, and non-empty.
+
+        Raises:
+            SETTValidationError: If expert.name is empty or whitespace.
+            SETTConfigurationError: If an expert is already registered
+                under this name (F05/F08, defensive audit #2). Unlike
+                SETTOrchestrator.register_agent() - whose domain-keyed
+                "swap the stub for the real agent" replacement is a
+                documented, tested feature - nothing here documents or
+                tests re-registering an expert name as a way to replace
+                it, so a duplicate is treated as the programming error
+                it almost always is: two different experts unintentionally
+                sharing one name, the second silently shadowing the
+                first.
         """
+        if not isinstance(expert.name, str) or not expert.name.strip():
+            raise SETTValidationError(
+                "SETTExpert.name must be a non-empty string."
+            )
+        if expert.name in self._experts:
+            raise SETTConfigurationError(
+                f"An expert is already registered under the name "
+                f"{expert.name!r} on agent {self.name!r}. Every expert "
+                f"name must be unique within its agent."
+            )
         expert.attach_memory(self._private_memory)
         expert._install_trace_interceptor()
         if self._trace_recorder is not None:

@@ -19,7 +19,7 @@ includes:
 
 1. Fork the repository
 2. Create a branch for your change
-3. Make sure `pytest tests/ -v` passes before opening a PR
+3. Make sure `python -m pytest tests/ -v` passes before opening a PR
 4. Open a Pull Request describing what changed and why
 
 If you're adding a new agent/expert pattern or touching `ethics_ruler`,

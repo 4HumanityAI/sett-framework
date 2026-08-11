@@ -178,8 +178,8 @@ class TestPhrasingExpertWithAgent:
         assert result["time_of_day"] == "morning"
 
     def test_verify_facts_default_is_a_pass_through(self):
-        """Sin override, verify_facts() no cambia nada - el default de
-        v0.10.0 debe ser indistinguible del comportamiento pre-v0.10.0."""
+        """Without an override, verify_facts() changes nothing - v0.10.0's
+        default must be indistinguishable from pre-v0.10.0 behavior."""
         expert = GreetingLikeExpert(name="greeting", llm=FakeLLM())
         result = expert.resolve({"hour": 8})
         assert result["greeting"] == "Hey there! Beautiful morning, isn't it?"

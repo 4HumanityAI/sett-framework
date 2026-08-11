@@ -60,7 +60,7 @@ The **SETTOrchestrator** is the central coordinator. It hosts all agents, manage
 
 SETT uses two distinct memory layers, and the separation is intentional.
 
-**PrivateMemory** belongs to one agent. Only the experts within that agent can write to it. The orchestrator has no access. This is where agents do their internal reasoning: intermediate calculations, partial results, working state. Nothing leaves this memory until the agent decides to publish.
+**PrivateMemory** belongs to one agent. Only the experts within that agent are given a reference to it, and the orchestrator is never given one - a design and API-surface convention, not a runtime access-control boundary. This is where agents do their internal reasoning: intermediate calculations, partial results, working state. Nothing leaves this memory until the agent decides to publish.
 
 **UniversalMemory** is shared. All agents can publish to it, and the orchestrator can read everything from it. But agents only publish final, synthesized results: not their internal process. The universal memory is the system's source of truth, not a shared workspace.
 
@@ -106,17 +106,17 @@ The RiskProfile lives exclusively in PrivateMemory. It is never published to uni
 
 ### Layer 3: Environmental context (RiskLevel 0–5)
 
-The EnvironmentalContext describes the state of the space the user is in, not the user themselves. It is the only risk data that can be shared between SETT instances. When one instance detects a critical situation and publishes RiskLevel 4 for a location, other instances in the same location read it and their filters tighten automatically. No personal data is ever shared, only the level and the location. The source of the risk remains completely anonymous, while the relevant systems and safeguards are activated as needed.
+The EnvironmentalContext describes the state of the space the user is in, not the user themselves. It is the only risk data that can be shared between SETT instances. When one instance detects a critical situation and publishes RiskLevel 4 for a location, other instances in the same location read it and their filters tighten automatically. It is designed to carry the level and the location, not the person: "the environment has this level", never "this person has this profile".
 
-> **Privacy contract:** EnvironmentalContext never contains personal identifiers, biometric values, or RiskProfile data. It communicates "the environment has this level": never "this person has this profile".
+> **Privacy design, not a runtime guarantee (F11, defensive audit #2):** EnvironmentalContext is shaped so that a caller following its intent shares only the RiskLevel, the location, and the source domain - `location_id`, `source_domain`, and `message` are plain, unvalidated strings, so nothing in the class itself stops a caller from putting a personal identifier or biometric value into them. Keeping personal data out of an EnvironmentalContext is the responsibility of the code that constructs it.
 
 ---
 
 ## The EthicalFilter
 
-The EthicalFilter is not a prompt. It is an architectural layer that intercepts every action and every write to universal memory before it is executed. This distinction matters: a system that relies on a prompt to be ethical can have that prompt bypassed or ignored. A system with a governance layer at the infrastructure level cannot.
+The EthicalFilter is not a prompt. It is an architectural layer that intercepts every action submitted through `SETTExecutor` (via `submit_action()`/`submit()`/`submit_controlled()`) and every write to universal memory before it is executed. This distinction matters: a system that relies on a prompt to be ethical can have that prompt bypassed or ignored. A system with a governance layer at the infrastructure level, sitting on the one path that actually performs the side effect, cannot.
 
-In SETT, every action and every decision passes through the ethical filter and is either accepted or rejected before it reaches the user or the outside world. Ethics matter more than the system's capabilities. A framework that cannot say no is not trustworthy.
+Every action and every decision that goes through that path is either accepted or rejected before it reaches the user or the outside world. This is a structural guarantee for that path specifically, not a claim that SETT intercepts arbitrary Python (F19, defensive audit #2): `propose_action()` and any side effect performed directly in application code, outside `SETTExecutor`, are opt-in and remain the calling application's responsibility - SETT cannot govern an effect it is never asked to run. Ethics matter more than the system's capabilities. A framework that cannot say no, for the actions it does execute, is not trustworthy.
 
 The filter evaluates every action using the three-layer risk system and returns one of three verdicts:
 

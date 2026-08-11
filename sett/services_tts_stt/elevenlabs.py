@@ -26,8 +26,16 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from sett.core_ruler.lifecycle import (
+    pop_lifecycle_kwargs,
+    validate_duration_seconds,
+)
 from sett.services_tts_stt.base import TTSBase
-from sett.exceptions import SETTServiceAdapterError
+from sett.exceptions import (
+    SETTServiceAdapterError,
+    DEFAULT_PROVIDER_ERROR_MAX_LENGTH,
+    bound_provider_error_message,
+)
 
 try:
     import requests
@@ -81,7 +89,12 @@ class ElevenLabsTTSAdapter(TTSBase):
                 "pip install sett-framework[elevenlabs]"
             )
 
-        self._api_key = api_key or os.getenv("ELEVENLABS_API_KEY", "").strip()
+        # The strip() covers the whole expression, not just the environment
+        # lookup: an explicitly passed "   " is truthy, so binding it to
+        # os.getenv() alone let a whitespace-only key through the guard
+        # below and fail later as a provider 401 instead of here as the
+        # configuration error it is. Same shape as the three LLM adapters.
+        self._api_key = (api_key or os.getenv("ELEVENLABS_API_KEY", "")).strip()
         if not self._api_key:
             raise SETTServiceAdapterError(
                 "ElevenLabs API key not found. "
@@ -93,14 +106,22 @@ class ElevenLabsTTSAdapter(TTSBase):
         self._stability = min(1.0, max(0.0, stability))
         self._similarity_boost = min(1.0, max(0.0, similarity_boost))
         self._style = min(1.0, max(0.0, style))
-        self._timeout_seconds = timeout_seconds
+        self._timeout_seconds = validate_duration_seconds(
+            timeout_seconds, name="timeout_seconds"
+        )
 
     @property
     def audio_format(self) -> str:
+        """The container this adapter returns audio in."""
         return "mp3"
 
     def synthesize(self, text: str, **kwargs: Any) -> bytes:
         """Synthesize speech audio (MP3 bytes) for the given text."""
+        lifecycle = pop_lifecycle_kwargs(kwargs)
+        # Checked before the request goes out, which is the only moment
+        # where stopping is free. Once the provider has the request, the
+        # audio has been paid for whether or not anybody waits for it.
+        lifecycle.throw_if_cancelled()
         voice_id = kwargs.get("voice_id", self._voice_id)
         url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
         headers = {
@@ -123,17 +144,28 @@ class ElevenLabsTTSAdapter(TTSBase):
 
         try:
             response = requests.post(
-                url, headers=headers, json=payload, timeout=self._timeout_seconds
+                url,
+                headers=headers,
+                json=payload,
+                timeout=lifecycle.effective_timeout(self._timeout_seconds),
             )
         except requests.exceptions.RequestException as e:
             raise SETTServiceAdapterError(
-                f"Could not reach ElevenLabs: {e}"
+                f"Could not reach ElevenLabs: "
+                f"{bound_provider_error_message(e)}"
             ) from e
 
         if response.status_code != 200:
+            # F29 (defensive audit #2): the HTTP error body is not
+            # SETT's content and is bounded to the same limit as an
+            # exception message, for the same reason - an adapter
+            # error should not be able to carry an arbitrarily long
+            # provider payload across the boundary.
+            body = response.text
+            if len(body) > DEFAULT_PROVIDER_ERROR_MAX_LENGTH:
+                body = body[:DEFAULT_PROVIDER_ERROR_MAX_LENGTH] + "... [truncated]"
             raise SETTServiceAdapterError(
-                f"ElevenLabs API error: {response.status_code} - "
-                f"{response.text[:500]}"
+                f"ElevenLabs API error: {response.status_code} - {body}"
             )
 
         return response.content

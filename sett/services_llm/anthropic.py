@@ -13,8 +13,12 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from sett.core_ruler.lifecycle import (
+    pop_lifecycle_kwargs,
+    validate_duration_seconds,
+)
 from sett.services_llm.base import LLMBase
-from sett.exceptions import SETTLLMAdapterError
+from sett.exceptions import SETTLLMAdapterError, bound_provider_error_message
 
 
 class AnthropicAdapter(LLMBase):
@@ -34,6 +38,7 @@ class AnthropicAdapter(LLMBase):
     DEFAULT_MODEL = "claude-sonnet-4-20250514"
     DEFAULT_MAX_TOKENS = 1024
     DEFAULT_TEMPERATURE = 0.75
+    DEFAULT_TIMEOUT_SECONDS = 60.0
 
     def __init__(
         self,
@@ -41,6 +46,7 @@ class AnthropicAdapter(LLMBase):
         model: str = DEFAULT_MODEL,
         max_tokens: int = DEFAULT_MAX_TOKENS,
         temperature: float = DEFAULT_TEMPERATURE,
+        timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     ) -> None:
         """
         Args:
@@ -48,6 +54,9 @@ class AnthropicAdapter(LLMBase):
             model: The Claude model to use.
             max_tokens: Maximum tokens in the response.
             temperature: Sampling temperature (0.0 to 1.0).
+            timeout_seconds: This adapter's own default timeout, in effect
+                when no ambient run gives it a stricter one (see
+                ``lifecycle.AdapterLifecycle.effective_timeout``).
         """
         try:
             import anthropic as _anthropic
@@ -58,7 +67,7 @@ class AnthropicAdapter(LLMBase):
                 "Install it with: pip install sett-framework[anthropic]"
             )
 
-        self._api_key = api_key or os.getenv("ANTHROPIC_API_KEY", "").strip()
+        self._api_key = (api_key or os.getenv("ANTHROPIC_API_KEY", "")).strip()
         if not self._api_key:
             raise SETTLLMAdapterError(
                 "Anthropic API key not found. "
@@ -68,14 +77,30 @@ class AnthropicAdapter(LLMBase):
         self._model = model
         self._max_tokens = max_tokens
         self._temperature = min(1.0, max(0.0, temperature))
-        self._client = self._anthropic.Anthropic(api_key=self._api_key)
+        self._timeout_seconds = validate_duration_seconds(
+            timeout_seconds, name="timeout_seconds"
+        )
+        # Wrapped because whatever the SDK raises here is a failure of this
+        # adapter, and Convention #13 says a caller holding
+        # ``except SETTError`` should not have to also know the provider
+        # library's exception hierarchy to catch it.
+        try:
+            self._client = self._anthropic.Anthropic(api_key=self._api_key)
+        except Exception as error:
+            raise SETTLLMAdapterError(
+                f"The 'anthropic' client could not be constructed: "
+                f"{type(error).__name__}: {error}"
+            ) from error
 
     @property
     def model_name(self) -> str:
+        """The Claude model this adapter calls."""
         return self._model
 
     def complete(self, prompt: str, system: str = "", **kwargs: Any) -> str:
         """One-shot completion: no conversation history."""
+        lifecycle = pop_lifecycle_kwargs(kwargs)
+        lifecycle.throw_if_cancelled()
         try:
             resp = self._client.messages.create(
                 model=self._model,
@@ -83,12 +108,15 @@ class AnthropicAdapter(LLMBase):
                 system=system or "You are a helpful assistant.",
                 temperature=kwargs.get("temperature", self._temperature),
                 messages=[{"role": "user", "content": prompt}],
+                timeout=lifecycle.effective_timeout(self._timeout_seconds),
             )
-            return resp.content[0].text if resp.content else ""
         except Exception as e:
             raise SETTLLMAdapterError(
-                f"Anthropic API error during complete(): {e}"
+                f"Anthropic API error during complete(): "
+                f"{bound_provider_error_message(e)}"
             ) from e
+        lifecycle.throw_if_cancelled()
+        return resp.content[0].text if resp.content else ""
 
     def chat(
         self,
@@ -97,6 +125,8 @@ class AnthropicAdapter(LLMBase):
         **kwargs: Any,
     ) -> str:
         """Multi-turn conversation completion."""
+        lifecycle = pop_lifecycle_kwargs(kwargs)
+        lifecycle.throw_if_cancelled()
         try:
             resp = self._client.messages.create(
                 model=self._model,
@@ -104,12 +134,15 @@ class AnthropicAdapter(LLMBase):
                 system=system or "You are a helpful assistant.",
                 temperature=kwargs.get("temperature", self._temperature),
                 messages=messages,
+                timeout=lifecycle.effective_timeout(self._timeout_seconds),
             )
-            return resp.content[0].text if resp.content else ""
         except Exception as e:
             raise SETTLLMAdapterError(
-                f"Anthropic API error during chat(): {e}"
+                f"Anthropic API error during chat(): "
+                f"{bound_provider_error_message(e)}"
             ) from e
+        lifecycle.throw_if_cancelled()
+        return resp.content[0].text if resp.content else ""
 
     def __repr__(self) -> str:
         return f"AnthropicAdapter(model={self._model!r})"

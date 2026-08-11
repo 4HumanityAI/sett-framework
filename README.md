@@ -5,38 +5,33 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.21287133-blue)](https://doi.org/10.5281/zenodo.21287133)
+[![Sponsor](https://img.shields.io/badge/sponsor-%E2%9D%A4-red)](https://github.com/sponsors/EduDanielV)
 
-**Current source release: 0.11.0** introduces immutable, derivable
-`ExecutionContext` objects and complete causal tracing across routing,
-agents, experts, pipelines, governed memory publication, policy decisions,
-actions, handlers, results, rejections, and errors. Existing
-`process(input_data)` and `resolve(context)` implementations continue to
-work unchanged. Traces are tamper-evident, exportable through sanitized
-views, and never inspect private-memory values or record application
-payloads by default. A real-world handler is blocked if its pre-effect trace
-event cannot be delivered to a configured exporter. See
-[`MIGRATION_v0.11.md`](MIGRATION_v0.11.md) and
+**Current source release: 0.12.0** adds lifecycle management - cancellation,
+deadlines, structured outcomes and idempotency - entirely alongside the
+existing API. `ExecutionControl` carries its own `ExecutionContext` rather
+than a hierarchy of its own; subtree cancellation is resolved by walking the
+`parent_id` chain that context tree already maintains, so the `run_id`
+visible in an exported trace event is the identifier that can be cancelled.
+`process_controlled()`, `run_pipeline_controlled()` and `submit_controlled()`
+are new, separate entry points - `process()`, `run_pipeline()` and `submit()`
+are untouched, and the 340 tests of 0.11.0 pass against 0.12.0 unmodified.
+See [`CHANGELOG.md`](CHANGELOG.md) for the full list of additions and fixes.
+
+Before that, 0.11.0 introduced immutable, derivable `ExecutionContext`
+objects and complete causal tracing across routing, agents, experts,
+pipelines, governed memory publication, policy decisions, actions, handlers,
+results, rejections, and errors. Traces are tamper-evident, exportable
+through sanitized views, and never inspect private-memory values or record
+application payloads by default. Its upgrade notes are in
 [`CHANGELOG.md`](CHANGELOG.md).
 
-Before that, 0.10.1 hardened documentation and public-tree consistency,
-and 0.10.0 added a fourth,
-optional hook, `verify_facts(phrased, facts, context)`, for validating
-already-phrased text against known facts and swapping it out if it
-contradicts them - motivated by two independent downstream subclasses that
-each needed exactly this and had to override `resolve()` wholesale to get
-it (external-audit finding). Fully backward compatible: the default is a
-pass-through, existing subclasses are unaffected. Also closes a residual
-type-hint gap on `SETTOrchestrator.register_executor()` from the 0.8.0
-audit. See [`CHANGELOG.md`](CHANGELOG.md) for the full entry.
-
-Previous release, 0.9.0, closed the gaps found in a full public-API audit
-of 0.8.0: defensive copies now match on both memory layers, audit log
-verification is reachable directly from the orchestrator, subclassing
-PhrasingExpert against its own contract now warns instead of failing
-silently, and every public symbol is documented, including a new explicit
-concurrency stance. See [`CHANGELOG.md`](CHANGELOG.md),
-[`MIGRATION_v0.8.md`](MIGRATION_v0.8.md), and
-[`docs/security_model.md`](docs/security_model.md).
+Previous release, 0.10.1, hardened documentation and public-tree
+consistency; 0.10.0 added a fourth, optional `PhrasingExpert` hook,
+`verify_facts(phrased, facts, context)`, for validating already-phrased text
+against known facts and swapping it out if it contradicts them - motivated
+by two independent downstream subclasses that each needed exactly this.
+See [`CHANGELOG.md`](CHANGELOG.md) for the full entry.
 
 SETT is a modular multi-agent AI framework built around domain-specialized
 expert agents coordinated by a central orchestrator.
@@ -65,7 +60,7 @@ separates:
 - **Reasoning**: pre-designed experts, one task each
 - **Communication**: agents publish events, they never call each other directly
 - **Memory**: private per agent, universal only for final results
-- **Execution**: real-world side effects run through a single, auditable gate
+- **Execution**: real-world side effects submitted through `SETTExecutor` run through a single, auditable gate
 - **Ethical validation**: a governance layer, not a prompt that can be skipped
 
 This separation makes complex multi-agent systems easier to audit, extend,
@@ -155,6 +150,10 @@ for entry in orchestrator.get_ethical_audit_log():
 - ✔ Fail-closed execution: detached Executor, missing filter/handler, or rejection → nothing runs
 - ✔ Defensive shared-memory and audit snapshots with verifiable hash chains
 - ✔ Native pipelines: chain agents with explicit, hand-to-hand data flow
+- ✔ Cooperative cancellation addressed by the same run_id your traces expose
+- ✔ Monotonic deadlines that nest downward and never extend upward
+- ✔ Structured outcomes that keep a rejection, a timeout and a failure apart
+- ✔ Idempotency keys and opt-in retries at the real-world effect boundary
 - ✔ Swappable LLM adapters (Claude, GPT, Gemini, Ollama)
 
 ## Core concepts
@@ -164,11 +163,11 @@ for entry in orchestrator.get_ethical_audit_log():
 | `SETTOrchestrator` | Brain of the system. Coordinates agents, manages universal memory. |
 | `SETTAgent` | Domain specialist composed of experts. Has its own private memory. |
 | `SETTExpert` | Atomic unit. Resolves one specific task. |
-| `SETTExecutor` | The only component allowed to execute real-world side effects, and only after ethical approval. |
+| `SETTExecutor` | The one gate for real-world side effects submitted through it (`submit_action()`/`submit()`/`submit_controlled()`), executed only after ethical approval. Side effects performed directly in application code, outside `SETTExecutor`, are not intercepted. |
 | `Action` | A real-world side effect described as data, not code. |
 | `UniversalMemory` | Shared state. Agents publish only final results here. |
-| `PrivateMemory` | Each agent's internal workspace. Not accessible from outside. |
-| `EthicalFilter` | Governance layer. Every action passes through it before execution. |
+| `PrivateMemory` | Each agent's internal workspace. Not exposed through the public API; isolated by convention, not by a runtime access-control boundary. |
+| `EthicalFilter` | Governance layer. Every action submitted through `SETTExecutor` passes through it before execution. |
 | `ContextAnalyzer` | Evaluates a proposed action in context; domain analyzers can return a `SafetyAssessment` separating urgency, action harm, and omission risk. |
 | `run_pipeline()` | Orchestrator method. Chains registered agents into an ordered sequence of stages with explicit, hand-to-hand data flow, never through universal memory, and fail-closed rejection handling. See `docs/api_reference.md`. |
 
@@ -222,6 +221,15 @@ A full reference implementation built on SETT is currently in development.
 It will be published here when ready and will demonstrate the framework
 in a real-world application covering health monitoring, empathic interaction,
 schedule management, and emergency response.
+
+## Sponsors
+
+SETT is free and MIT-licensed for everyone, and stays that way.
+[Sponsoring](SPONSORS.md) is a way to help fund maintenance time on the
+framework layer itself.
+
+*Nobody yet - you could be the first. See [`SPONSORS.md`](SPONSORS.md)
+for tiers.*
 
 ## Contributing
 
