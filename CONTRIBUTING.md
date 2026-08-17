@@ -26,6 +26,23 @@ If you're adding a new agent/expert pattern or touching `ethics_ruler`,
 a quick Issue first (before writing code) is a good idea: it's a
 young framework and some design decisions are still being settled.
 
+## Documentation paths
+
+Living contracts and design documents keep one stable, version-independent
+path: one concept, one canonical file. Update that file in place and record
+its `Introduced` and `Last reviewed` versions inside the document. Git history,
+release tags, and `CHANGELOG.md` preserve earlier revisions.
+
+Use a version in a filename only when the document is intentionally tied to a
+single release and will not become the current contract, such as a migration
+guide or an immutable historical decision record. Do not create a second
+versioned copy of an existing living document.
+
+In prose, prefer commas, semicolons, colons, parentheses, or a sentence break
+to a dash-shaped pause. Keep hyphens and dashes when they are functional, such
+as arithmetic operators, Markdown list markers, changelog dates, numeric
+ranges, glossary separators, command options, or tool directives.
+
 ## 🧩 New to the codebase?
 
 Start with [`templates/`](templates/): blank, copy-and-fill starting

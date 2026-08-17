@@ -73,7 +73,7 @@ def _fake_google_cloud_sys_modules(submodule_name: str, submodule_mock: MagicMoc
 
     # F18 fix: the adapter now loads credentials explicitly via
     # google.oauth2.service_account instead of mutating os.environ, so
-    # that import must resolve too - same parent-attribute caveat as
+    # that import must resolve too, with the same parent-attribute caveat as
     # google.cloud above.
     service_account_mock = MagicMock(name="google.oauth2.service_account")
     oauth2_mock = MagicMock(name="google.oauth2")
@@ -155,7 +155,7 @@ class TestGoogleTTSAdapterSynthesize:
         This used to assert that an unset GOOGLE_APPLICATION_CREDENTIALS
         was itself the error. That encoded a defect: Application Default
         Credentials resolve from five sources and the environment variable
-        is one, so the check refused four valid setups - including GKE
+        is one, so the check refused four valid setups, including GKE
         workload identity, where the only way to satisfy it was the
         service account key file Google recommends avoiding.
         """
@@ -292,7 +292,7 @@ class TestGoogleSTTAdapterTranscribe:
         This used to assert that an unset GOOGLE_APPLICATION_CREDENTIALS
         was itself the error. That encoded a defect: Application Default
         Credentials resolve from five sources and the environment variable
-        is one, so the check refused four valid setups - including GKE
+        is one, so the check refused four valid setups, including GKE
         workload identity, where the only way to satisfy it was the
         service account key file Google recommends avoiding.
         """

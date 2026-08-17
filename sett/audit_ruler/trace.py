@@ -21,8 +21,8 @@ TraceExporter = Callable[[dict[str, Any]], None]
 # Which terminal kinds may close each instrumented start kind.
 #
 # Hoisted to module level in v0.12.0 for one specific reason: the set of
-# terminals that may close "trace.started" used to be written twice - once
-# here and once inline in the single-terminal check further down - and two
+# terminals that may close "trace.started" used to be written twice, once
+# here and once inline in the single-terminal check further down. Two
 # copies of a list that must agree is a list that eventually will not. Both
 # readers now derive from this one mapping, so adding a terminal cannot be
 # done for one check and forgotten for the other.
@@ -105,6 +105,9 @@ _TERMINAL_BY_START: dict[str, frozenset[str]] = {
     ),
     "handler.attempt_started": frozenset(
         {"handler.attempt_completed", "handler.attempt_failed"}
+    ),
+    "adapter.call_started": frozenset(
+        {"adapter.call_completed", "adapter.call_failed"}
     ),
 }
 
@@ -347,8 +350,8 @@ class TraceRecorder:
         """Whether this recorder holds ``event_id``, optionally in one trace.
 
         Exists so a caller can safely use an event id that reached it from
-        outside - a cancellation request carried on an exception, for
-        instance - as a ``cause_id``. Referencing an event this recorder
+        outside, such as a cancellation request carried on an exception,
+        as a ``cause_id``. Referencing an event this recorder
         never saw, or one belonging to a different trace, is precisely what
         ``verify()`` rejects, so the honest move is to check first and fall
         back to a local cause rather than to record an unverifiable link.
@@ -405,7 +408,7 @@ class TraceRecorder:
         Verify this recorder's hash chain and structural integrity.
 
         The chain is global, over every event this recorder has ever
-        recorded - there is no separate chain per trace_id (F28,
+        recorded; there is no separate chain per trace_id (F28,
         defensive audit #2). Passing ``trace_id`` only adds a
         precondition, "at least one event with this trace_id exists";
         it does not scope verification to that trace alone. Corruption

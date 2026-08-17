@@ -58,7 +58,7 @@ class BiometricReading:
         A mistyped vital sign (a string, a list, anything not a real
         number) used to construct successfully and only fail later, with
         a bare ``TypeError`` from the ``>``/``<`` comparisons inside
-        ``is_critical`` - raised far from where the bad value actually
+        ``is_critical``, raised far from where the bad value actually
         came from, and not the structured exception type the rest of
         this framework raises for invalid data. Validating here fails at
         construction instead, with a message that names the field.
@@ -113,8 +113,8 @@ class BiometricReading:
         shared parser, a second call site added later could silently
         reintroduce the identical bug by guessing the shape differently.
 
-        A context with no usable health data - missing, empty, or not a
-        mapping at all - returns a BiometricReading with both fields
+        A context with no usable health data, whether missing, empty, or not a
+        mapping at all, returns a BiometricReading with both fields
         None, which is never critical. That is the absent case, and it is
         deliberately not an error: a system without a wearable attached
         must still run.
@@ -122,7 +122,7 @@ class BiometricReading:
         A value that is present but not a number is a different case and
         does raise SETTValidationError. "fast" where a heart rate belongs
         is a bug in whatever produced it, and silently reading it as
-        "no data" would turn a broken sensor into a healthy one - the
+        "no data" would turn a broken sensor into a healthy one, the
         opposite of what this class is for. (An earlier version of this
         docstring said "never raises", which stopped being true when that
         validation was added.)

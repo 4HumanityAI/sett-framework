@@ -23,19 +23,28 @@ do not belong in a stateless adapter.
 Requires: pip install sett-framework[elevenlabs]
 """
 from __future__ import annotations
+
 import os
 from typing import Any
 
+from sett.core_ruler.adapter import (
+    AdapterCapabilities,
+    AdapterErrorKind,
+    AdapterKind,
+    CapabilitySupport,
+    ConnectivityRequirement,
+    adapter_call_scope,
+    normalized_adapter_error,
+)
 from sett.core_ruler.lifecycle import (
     pop_lifecycle_kwargs,
     validate_duration_seconds,
 )
-from sett.services_tts_stt.base import TTSBase
 from sett.exceptions import (
-    SETTServiceAdapterError,
     DEFAULT_PROVIDER_ERROR_MAX_LENGTH,
-    bound_provider_error_message,
+    SETTServiceAdapterError,
 )
+from sett.services_tts_stt.base import TTSBase
 
 try:
     import requests
@@ -86,7 +95,11 @@ class ElevenLabsTTSAdapter(TTSBase):
             raise SETTServiceAdapterError(
                 "The 'requests' package is required to use "
                 "ElevenLabsTTSAdapter. Install it with: "
-                "pip install sett-framework[elevenlabs]"
+                "pip install sett-framework[elevenlabs]",
+                kind=AdapterErrorKind.CONFIGURATION,
+                provider="elevenlabs",
+                adapter_name=type(self).__name__,
+                reason_code="adapter.dependency_missing",
             )
 
         # The strip() covers the whole expression, not just the environment
@@ -98,7 +111,11 @@ class ElevenLabsTTSAdapter(TTSBase):
         if not self._api_key:
             raise SETTServiceAdapterError(
                 "ElevenLabs API key not found. "
-                "Pass api_key= or set the ELEVENLABS_API_KEY environment variable."
+                "Pass api_key= or set the ELEVENLABS_API_KEY environment variable.",
+                kind=AdapterErrorKind.CONFIGURATION,
+                provider="elevenlabs",
+                adapter_name=type(self).__name__,
+                reason_code="adapter.credentials_missing",
             )
 
         self._voice_id = voice_id
@@ -115,60 +132,79 @@ class ElevenLabsTTSAdapter(TTSBase):
         """The container this adapter returns audio in."""
         return "mp3"
 
+    @property
+    def capabilities(self) -> AdapterCapabilities:
+        """The configured custom voice path implemented by this adapter."""
+        return AdapterCapabilities(
+            AdapterKind.TTS,
+            streaming=CapabilitySupport.NO,
+            voice_cloning=CapabilitySupport.YES,
+            partial_results=CapabilitySupport.NO,
+            connectivity=ConnectivityRequirement.REMOTE_SERVICE,
+            input_formats=("text",),
+            output_formats=("audio/mpeg",),
+            metadata={"custom_voice_id": True},
+        )
+
     def synthesize(self, text: str, **kwargs: Any) -> bytes:
         """Synthesize speech audio (MP3 bytes) for the given text."""
-        lifecycle = pop_lifecycle_kwargs(kwargs)
-        # Checked before the request goes out, which is the only moment
-        # where stopping is free. Once the provider has the request, the
-        # audio has been paid for whether or not anybody waits for it.
-        lifecycle.throw_if_cancelled()
-        voice_id = kwargs.get("voice_id", self._voice_id)
-        url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
-        headers = {
-            "accept": "audio/mpeg",
-            "xi-api-key": self._api_key,
-            "content-type": "application/json",
-        }
-        payload = {
-            "text": text,
-            "model_id": kwargs.get("model_id", self._model_id),
-            "voice_settings": {
-                "stability": kwargs.get("stability", self._stability),
-                "similarity_boost": kwargs.get(
-                    "similarity_boost", self._similarity_boost
-                ),
-                "style": kwargs.get("style", self._style),
-                "use_speaker_boost": kwargs.get("use_speaker_boost", True),
-            },
-        }
+        with adapter_call_scope(self, "synthesize"):
+            lifecycle = pop_lifecycle_kwargs(kwargs)
+            lifecycle.throw_if_cancelled()
+            voice_id = kwargs.get("voice_id", self._voice_id)
+            url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+            headers = {
+                "accept": "audio/mpeg",
+                "xi-api-key": self._api_key,
+                "content-type": "application/json",
+            }
+            payload = {
+                "text": text,
+                "model_id": kwargs.get("model_id", self._model_id),
+                "voice_settings": {
+                    "stability": kwargs.get("stability", self._stability),
+                    "similarity_boost": kwargs.get(
+                        "similarity_boost", self._similarity_boost
+                    ),
+                    "style": kwargs.get("style", self._style),
+                    "use_speaker_boost": kwargs.get("use_speaker_boost", True),
+                },
+            }
 
-        try:
-            response = requests.post(
-                url,
-                headers=headers,
-                json=payload,
-                timeout=lifecycle.effective_timeout(self._timeout_seconds),
-            )
-        except requests.exceptions.RequestException as e:
-            raise SETTServiceAdapterError(
-                f"Could not reach ElevenLabs: "
-                f"{bound_provider_error_message(e)}"
-            ) from e
+            try:
+                response = requests.post(
+                    url,
+                    headers=headers,
+                    json=payload,
+                    timeout=lifecycle.effective_timeout(self._timeout_seconds),
+                )
+            except requests.exceptions.RequestException as error:
+                raise normalized_adapter_error(
+                    error,
+                    error_type=SETTServiceAdapterError,
+                    provider="ElevenLabs",
+                    adapter_name=type(self).__name__,
+                    operation="synthesize",
+                    kind=AdapterErrorKind.UNAVAILABLE,
+                ) from error
 
-        if response.status_code != 200:
-            # F29 (defensive audit #2): the HTTP error body is not
-            # SETT's content and is bounded to the same limit as an
-            # exception message, for the same reason - an adapter
-            # error should not be able to carry an arbitrarily long
-            # provider payload across the boundary.
-            body = response.text
-            if len(body) > DEFAULT_PROVIDER_ERROR_MAX_LENGTH:
-                body = body[:DEFAULT_PROVIDER_ERROR_MAX_LENGTH] + "... [truncated]"
-            raise SETTServiceAdapterError(
-                f"ElevenLabs API error: {response.status_code} - {body}"
-            )
+            if response.status_code != 200:
+                body = response.text
+                if len(body) > DEFAULT_PROVIDER_ERROR_MAX_LENGTH:
+                    body = body[:DEFAULT_PROVIDER_ERROR_MAX_LENGTH] + "... [truncated]"
+                error = RuntimeError(body)
+                error.status_code = response.status_code  # type: ignore[attr-defined]
+                raise normalized_adapter_error(
+                    error,
+                    error_type=SETTServiceAdapterError,
+                    provider="ElevenLabs",
+                    adapter_name=type(self).__name__,
+                    operation="synthesize",
+                    status_code=response.status_code,
+                ) from error
 
-        return response.content
+            lifecycle.throw_if_cancelled()
+            return response.content
 
     def __repr__(self) -> str:
         return f"ElevenLabsTTSAdapter(voice_id={self._voice_id!r})"

@@ -139,9 +139,9 @@ class SETTExpert(ABC):
         """Resolve, closing the trace boundary whatever happens.
 
         Entering the control is inside this try on purpose: a control whose
-        entry checkpoint fails - cancellation arriving in the window
+        entry checkpoint fails, due to cancellation arriving in the window
         between ``expert.started`` being recorded and the expert actually
-        starting - raises before the body runs, and an ``expert.started``
+        starting, raises before the body runs, and an ``expert.started``
         with no terminal is the unclosed boundary the recorder rejects.
         """
         try:

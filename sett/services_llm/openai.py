@@ -9,15 +9,30 @@ AnthropicAdapter or GeminiAdapter.
 Requires: pip install sett-framework[openai]
 """
 from __future__ import annotations
+
 import os
 from typing import Any
 
+from sett.core_ruler.adapter import (
+    AdapterCapabilities,
+    AdapterErrorKind,
+    AdapterKind,
+    CapabilitySupport,
+    ConnectivityRequirement,
+    adapter_call_scope,
+    normalized_adapter_error,
+)
 from sett.core_ruler.lifecycle import (
     pop_lifecycle_kwargs,
     validate_duration_seconds,
 )
+from sett.exceptions import (
+    SETTAdapterError,
+    SETTCancelledError,
+    SETTLLMAdapterError,
+    SETTTimeoutError,
+)
 from sett.services_llm.base import LLMBase
-from sett.exceptions import SETTLLMAdapterError, bound_provider_error_message
 
 
 class OpenAIAdapter(LLMBase):
@@ -63,14 +78,22 @@ class OpenAIAdapter(LLMBase):
         except ImportError:
             raise SETTLLMAdapterError(
                 "The 'openai' package is required to use the OpenAIAdapter. "
-                "Install it with: pip install sett-framework[openai]"
+                "Install it with: pip install sett-framework[openai]",
+                kind=AdapterErrorKind.CONFIGURATION,
+                provider="openai",
+                adapter_name=type(self).__name__,
+                reason_code="adapter.dependency_missing",
             )
 
         self._api_key = (api_key or os.getenv("OPENAI_API_KEY", "")).strip()
         if not self._api_key:
             raise SETTLLMAdapterError(
                 "OpenAI API key not found. "
-                "Pass api_key= or set the OPENAI_API_KEY environment variable."
+                "Pass api_key= or set the OPENAI_API_KEY environment variable.",
+                kind=AdapterErrorKind.CONFIGURATION,
+                provider="openai",
+                adapter_name=type(self).__name__,
+                reason_code="adapter.credentials_missing",
             )
 
         self._model = model
@@ -85,10 +108,17 @@ class OpenAIAdapter(LLMBase):
         # library's exception hierarchy to catch it.
         try:
             self._client = self._openai.OpenAI(api_key=self._api_key)
+        except (SETTCancelledError, SETTTimeoutError, SETTAdapterError):
+            raise
         except Exception as error:
-            raise SETTLLMAdapterError(
-                f"The 'openai' client could not be constructed: "
-                f"{type(error).__name__}: {error}"
+            raise normalized_adapter_error(
+                error,
+                error_type=SETTLLMAdapterError,
+                provider="openai",
+                adapter_name=type(self).__name__,
+                operation="construct",
+                kind=AdapterErrorKind.CONFIGURATION,
+                reason_code="adapter.client_construction_failed",
             ) from error
 
     @property
@@ -96,28 +126,55 @@ class OpenAIAdapter(LLMBase):
         """The GPT model this adapter calls."""
         return self._model
 
+    @property
+    def capabilities(self) -> AdapterCapabilities:
+        """Capabilities implemented by this synchronous adapter."""
+        return AdapterCapabilities(
+            AdapterKind.LLM,
+            streaming=CapabilitySupport.NO,
+            voice_cloning=CapabilitySupport.NO,
+            partial_results=CapabilitySupport.NO,
+            connectivity=ConnectivityRequirement.REMOTE_SERVICE,
+            input_formats=("text",),
+            output_formats=("text",),
+            metadata={"operations": ("complete", "chat")},
+        )
+
     def complete(self, prompt: str, system: str = "", **kwargs: Any) -> str:
         """One-shot completion: no conversation history."""
-        lifecycle = pop_lifecycle_kwargs(kwargs)
-        lifecycle.throw_if_cancelled()
-        try:
-            resp = self._client.chat.completions.create(
-                model=self._model,
-                max_tokens=kwargs.get("max_tokens", self._max_tokens),
-                temperature=kwargs.get("temperature", self._temperature),
-                messages=[
-                    {"role": "system", "content": system or "You are a helpful assistant."},
-                    {"role": "user", "content": prompt},
-                ],
-                timeout=lifecycle.effective_timeout(self._timeout_seconds),
-            )
-        except Exception as e:
-            raise SETTLLMAdapterError(
-                f"OpenAI API error during complete(): "
-                f"{bound_provider_error_message(e)}"
-            ) from e
-        lifecycle.throw_if_cancelled()
-        return resp.choices[0].message.content or ""
+        with adapter_call_scope(self, "complete"):
+            lifecycle = pop_lifecycle_kwargs(kwargs)
+            lifecycle.throw_if_cancelled()
+            response_received = False
+            try:
+                resp = self._client.chat.completions.create(
+                    model=self._model,
+                    max_tokens=kwargs.get("max_tokens", self._max_tokens),
+                    temperature=kwargs.get("temperature", self._temperature),
+                    messages=[
+                        {"role": "system", "content": system or "You are a helpful assistant."},
+                        {"role": "user", "content": prompt},
+                    ],
+                    timeout=lifecycle.effective_timeout(self._timeout_seconds),
+                )
+                response_received = True
+                lifecycle.throw_if_cancelled()
+                return resp.choices[0].message.content or ""
+            except (SETTCancelledError, SETTTimeoutError, SETTAdapterError):
+                raise
+            except Exception as error:
+                raise normalized_adapter_error(
+                    error,
+                    error_type=SETTLLMAdapterError,
+                    provider="openai",
+                    adapter_name=type(self).__name__,
+                    operation="complete",
+                    kind=(
+                        AdapterErrorKind.INVALID_RESPONSE
+                        if response_received
+                        else None
+                    ),
+                ) from error
 
     def chat(
         self,
@@ -126,28 +183,36 @@ class OpenAIAdapter(LLMBase):
         **kwargs: Any,
     ) -> str:
         """Multi-turn conversation completion."""
-        lifecycle = pop_lifecycle_kwargs(kwargs)
-        lifecycle.throw_if_cancelled()
-        full_messages = []
-        if system:
-            full_messages.append({"role": "system", "content": system})
-        full_messages.extend(messages)
-
-        try:
-            resp = self._client.chat.completions.create(
-                model=self._model,
-                max_tokens=kwargs.get("max_tokens", self._max_tokens),
-                temperature=kwargs.get("temperature", self._temperature),
-                messages=full_messages,
-                timeout=lifecycle.effective_timeout(self._timeout_seconds),
-            )
-        except Exception as e:
-            raise SETTLLMAdapterError(
-                f"OpenAI API error during chat(): "
-                f"{bound_provider_error_message(e)}"
-            ) from e
-        lifecycle.throw_if_cancelled()
-        return resp.choices[0].message.content or ""
+        with adapter_call_scope(self, "chat"):
+            lifecycle = pop_lifecycle_kwargs(kwargs)
+            lifecycle.throw_if_cancelled()
+            full_messages = []
+            if system:
+                full_messages.append({"role": "system", "content": system})
+            full_messages.extend(messages)
+            response_received = False
+            try:
+                resp = self._client.chat.completions.create(
+                    model=self._model,
+                    max_tokens=kwargs.get("max_tokens", self._max_tokens),
+                    temperature=kwargs.get("temperature", self._temperature),
+                    messages=full_messages,
+                    timeout=lifecycle.effective_timeout(self._timeout_seconds),
+                )
+                response_received = True
+                lifecycle.throw_if_cancelled()
+                return resp.choices[0].message.content or ""
+            except (SETTCancelledError, SETTTimeoutError, SETTAdapterError):
+                raise
+            except Exception as error:
+                raise normalized_adapter_error(
+                    error,
+                    error_type=SETTLLMAdapterError,
+                    provider="openai",
+                    adapter_name=type(self).__name__,
+                    operation="chat",
+                    kind=(AdapterErrorKind.INVALID_RESPONSE if response_received else None),
+                ) from error
 
     def __repr__(self) -> str:
         return f"OpenAIAdapter(model={self._model!r})"

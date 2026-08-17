@@ -35,8 +35,8 @@ class exists: it emerged independently twice more in that same
 downstream project (a greeting that must never contradict the real
 time of day, and a reply that must never assert the wrong name for the
 user), each time as a full override of resolve() just to insert one
-check after the LLM already answered. That repetition - the same
-signal that created this class in the first place - is why the hook is
+check after the LLM already answered. That repetition, the same
+signal that created this class in the first place, is why the hook is
 now part of the contract instead of something every subclass has to
 reinvent by breaking it.
 """
@@ -60,7 +60,7 @@ class PhrasingExpert(SETTExpert):
     read or hear.
 
     Subclasses implement up to four methods instead of resolve()
-    directly - the first three are required, the fourth is optional:
+    directly: the first three are required, and the fourth is optional:
 
         determine_facts(context) -> dict
             Pure deterministic logic. No LLM involved. This is the
@@ -81,13 +81,13 @@ class PhrasingExpert(SETTExpert):
 
         verify_facts(phrased, facts, context) -> str
             Optional. Called AFTER the LLM (or fallback_text()) has
-            already produced `phrased` - the LLM answered fine from
+            already produced `phrased`, since the LLM answered fine from
             SETT's point of view, but what it actually said might
             still be wrong (e.g. it agreed with the user's own wrong
             assumption instead of the fact it was given). Return
             `phrased` unchanged if it holds up; return
             `self.fallback_text(facts, context)` (or anything else) to
-            replace it. Default: returns `phrased` unchanged - most
+            replace it. Default: returns `phrased` unchanged, since most
             subclasses don't need this at all.
 
     The phrased text is merged into the facts dict under the key named
@@ -194,13 +194,13 @@ class PhrasingExpert(SETTExpert):
     ) -> str:
         """
         Optional fourth hook (see class docstring), called once
-        `phrased` already exists - from the LLM if it was configured
+        `phrased` already exists, from the LLM if it was configured
         and succeeded, from fallback_text() otherwise. Default: no
         verification, `phrased` passes through unchanged.
 
         Override when the LLM succeeding isn't enough of a guarantee:
         what it actually said still needs to be checked against facts
-        already known (never against free-form interpretation - this
+        already known (never against free-form interpretation, since this
         should be closed, deterministic pattern matching, same spirit
         as everything else in this class). Return `phrased` if it's
         fine, or replace it (typically with

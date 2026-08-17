@@ -25,18 +25,27 @@ not architecture") concrete: swapping AnthropicAdapter for
 OllamaAdapter changes zero lines anywhere else in your system.
 """
 from __future__ import annotations
+
 import json
 import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any
 
+from sett.core_ruler.adapter import (
+    AdapterCapabilities,
+    AdapterErrorKind,
+    AdapterKind,
+    CapabilitySupport,
+    ConnectivityRequirement,
+    adapter_call_scope,
+)
 from sett.core_ruler.lifecycle import (
     pop_lifecycle_kwargs,
     validate_duration_seconds,
 )
-from sett.services_llm.base import LLMBase
 from sett.exceptions import SETTError, SETTLLMAdapterError
+from sett.services_llm.base import LLMBase
 
 
 def _validated_base_url(base_url: str) -> str:
@@ -56,7 +65,11 @@ def _validated_base_url(base_url: str) -> str:
     if not isinstance(base_url, str) or not base_url.strip():
         raise SETTLLMAdapterError(
             "Ollama base_url must be a non-empty string, for example "
-            f"'{OllamaAdapter.DEFAULT_BASE_URL}'."
+            f"'{OllamaAdapter.DEFAULT_BASE_URL}'.",
+            kind=AdapterErrorKind.CONFIGURATION,
+            provider="ollama",
+            adapter_name="OllamaAdapter",
+            reason_code="adapter.invalid_base_url",
         )
 
     trimmed = base_url.strip().rstrip("/")
@@ -65,19 +78,27 @@ def _validated_base_url(base_url: str) -> str:
         # Read on purpose and discarded: urllib parses the port only when
         # asked, so this is what turns a bad one into an error here
         # instead of on the first request.
-        parts.port
+        _ = parts.port
     except ValueError as e:
         # urllib reports these as plain ValueError: 'Invalid IPv6 URL',
         # 'Port could not be cast to integer value'.
         raise SETTLLMAdapterError(
-            f"Ollama base_url {base_url!r} is not a valid URL: {e}"
+            f"Ollama base_url {base_url!r} is not a valid URL: {e}",
+            kind=AdapterErrorKind.CONFIGURATION,
+            provider="ollama",
+            adapter_name="OllamaAdapter",
+            reason_code="adapter.invalid_base_url",
         ) from e
 
     if parts.scheme not in ("http", "https") or not parts.netloc:
         raise SETTLLMAdapterError(
             f"Ollama base_url {base_url!r} must be an absolute http(s) URL "
             f"including the host, for example "
-            f"'{OllamaAdapter.DEFAULT_BASE_URL}'."
+            f"'{OllamaAdapter.DEFAULT_BASE_URL}'.",
+            kind=AdapterErrorKind.CONFIGURATION,
+            provider="ollama",
+            adapter_name="OllamaAdapter",
+            reason_code="adapter.invalid_base_url",
         )
     return trimmed
 
@@ -142,26 +163,41 @@ class OllamaAdapter(LLMBase):
         """The Ollama model tag this adapter calls."""
         return self._model
 
+    @property
+    def capabilities(self) -> AdapterCapabilities:
+        """Capabilities implemented by the synchronous local-service client."""
+        return AdapterCapabilities(
+            AdapterKind.LLM,
+            streaming=CapabilitySupport.NO,
+            voice_cloning=CapabilitySupport.NO,
+            partial_results=CapabilitySupport.NO,
+            connectivity=ConnectivityRequirement.LOCAL_SERVICE,
+            input_formats=("text",),
+            output_formats=("text",),
+            metadata={"operations": ("complete", "chat")},
+        )
+
     def complete(self, prompt: str, system: str = "", **kwargs: Any) -> str:
         """One-shot completion: no conversation history."""
-        lifecycle = pop_lifecycle_kwargs(kwargs)
-        lifecycle.throw_if_cancelled()
-        payload: dict[str, Any] = {
-            "model": self._model,
-            "prompt": prompt,
-            "stream": False,
-            "options": {"temperature": kwargs.get("temperature", self._temperature)},
-        }
-        if system:
-            payload["system"] = system
+        with adapter_call_scope(self, "complete"):
+            lifecycle = pop_lifecycle_kwargs(kwargs)
+            lifecycle.throw_if_cancelled()
+            payload: dict[str, Any] = {
+                "model": self._model,
+                "prompt": prompt,
+                "stream": False,
+                "options": {"temperature": kwargs.get("temperature", self._temperature)},
+            }
+            if system:
+                payload["system"] = system
 
-        data = self._post(
-            "/api/generate",
-            payload,
-            timeout=lifecycle.effective_timeout(self._timeout_seconds),
-        )
-        lifecycle.throw_if_cancelled()
-        return data.get("response", "")
+            data = self._post(
+                "/api/generate",
+                payload,
+                timeout=lifecycle.effective_timeout(self._timeout_seconds),
+            )
+            lifecycle.throw_if_cancelled()
+            return data.get("response", "")
 
     def chat(
         self,
@@ -170,27 +206,28 @@ class OllamaAdapter(LLMBase):
         **kwargs: Any,
     ) -> str:
         """Multi-turn conversation completion."""
-        lifecycle = pop_lifecycle_kwargs(kwargs)
-        lifecycle.throw_if_cancelled()
-        full_messages = []
-        if system:
-            full_messages.append({"role": "system", "content": system})
-        full_messages.extend(messages)
+        with adapter_call_scope(self, "chat"):
+            lifecycle = pop_lifecycle_kwargs(kwargs)
+            lifecycle.throw_if_cancelled()
+            full_messages = []
+            if system:
+                full_messages.append({"role": "system", "content": system})
+            full_messages.extend(messages)
 
-        payload: dict[str, Any] = {
-            "model": self._model,
-            "messages": full_messages,
-            "stream": False,
-            "options": {"temperature": kwargs.get("temperature", self._temperature)},
-        }
+            payload: dict[str, Any] = {
+                "model": self._model,
+                "messages": full_messages,
+                "stream": False,
+                "options": {"temperature": kwargs.get("temperature", self._temperature)},
+            }
 
-        data = self._post(
-            "/api/chat",
-            payload,
-            timeout=lifecycle.effective_timeout(self._timeout_seconds),
-        )
-        lifecycle.throw_if_cancelled()
-        return data.get("message", {}).get("content", "")
+            data = self._post(
+                "/api/chat",
+                payload,
+                timeout=lifecycle.effective_timeout(self._timeout_seconds),
+            )
+            lifecycle.throw_if_cancelled()
+            return data.get("message", {}).get("content", "")
 
     def _post(
         self,
@@ -203,8 +240,8 @@ class OllamaAdapter(LLMBase):
         POST JSON to the local Ollama server using only the standard
         library: no extra pip dependency required for this adapter.
 
-        ``timeout`` is the effective one - the shorter of this adapter's
-        own setting and whatever time the surrounding run has left - so a
+        ``timeout`` is the effective one, namely the shorter of this adapter's
+        own setting and whatever time the surrounding run has left, so a
         local inference call cannot outlive the turn that asked for it.
 
         Every way this can fail leaves as ``SETTLLMAdapterError``, which
@@ -212,7 +249,7 @@ class OllamaAdapter(LLMBase):
         falls back to plain text on exactly that type). The frequent
         failures are named individually because their messages say what
         to do about them; the final clause exists because enumerating
-        urllib's failure modes has already proven incomplete - a
+        urllib's failure modes has already proven incomplete; a
         malformed URL surfaces as ``ValueError`` and a host with a space
         in it as ``http.client.InvalidURL``, neither of which is a
         ``URLError``. SETT exceptions pass through untouched so that a
@@ -237,23 +274,45 @@ class OllamaAdapter(LLMBase):
                 f"Could not reach Ollama at {self._base_url}. "
                 f"Is Ollama installed and running? "
                 f"Try 'ollama serve' or check that the Ollama app is open. "
-                f"Original error: {e}"
+                f"Original error: {e}",
+                kind=AdapterErrorKind.UNAVAILABLE,
+                provider="ollama",
+                adapter_name=type(self).__name__,
+                operation="request",
+                retryable=True,
+                reason_code="adapter.provider_unavailable",
             ) from e
         except json.JSONDecodeError as e:
             raise SETTLLMAdapterError(
-                f"Ollama returned a response that wasn't valid JSON: {e}"
+                "Ollama returned a response that wasn't valid JSON.",
+                kind=AdapterErrorKind.INVALID_RESPONSE,
+                provider="ollama",
+                adapter_name=type(self).__name__,
+                operation="request",
+                retryable=False,
+                reason_code="adapter.invalid_response",
             ) from e
         except TimeoutError as e:
             raise SETTLLMAdapterError(
                 f"Ollama did not respond within {effective_timeout}s. "
                 f"Local CPU inference can be slow on the first call (the "
                 f"model needs to load into memory): try again, or raise "
-                f"timeout_seconds if this keeps happening."
+                f"timeout_seconds if this keeps happening.",
+                kind=AdapterErrorKind.PROVIDER_TIMEOUT,
+                provider="ollama",
+                adapter_name=type(self).__name__,
+                operation="request",
+                retryable=None,
+                reason_code="adapter.provider_timeout",
             ) from e
         except Exception as e:
             raise SETTLLMAdapterError(
-                f"Ollama request to {url} failed: "
-                f"{type(e).__name__}: {e}"
+                f"Ollama request to {url} failed.",
+                kind=AdapterErrorKind.UNKNOWN,
+                provider="ollama",
+                adapter_name=type(self).__name__,
+                operation="request",
+                reason_code="adapter.unknown",
             ) from e
 
     def __repr__(self) -> str:

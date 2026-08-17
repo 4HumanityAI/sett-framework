@@ -16,6 +16,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover - typing only, never imported at runtime
+    from sett.core_ruler.adapter import AdapterErrorKind
     from sett.core_ruler.lifecycle import Deadline
 
 
@@ -32,10 +33,10 @@ def bound_provider_error_message(
     Named for what it does. It was called ``sanitize_...`` and that name
     promised redaction it never performed: a message carrying
     ``Authorization: Bearer sk-live-...`` came out carrying it still. The
-    honest options were to write a redactor for arbitrary third-party
-    text - unbounded work that produces confidence rather than safety,
-    because there is always one more format it does not know - or to say
-    plainly that this caps length and nothing else. This is the second.
+    One honest option was to write a redactor for arbitrary third-party
+    text. That is unbounded work that produces confidence rather than safety,
+    because there is always one more format it does not know. The other was to
+    say plainly that this caps length and nothing else. This is the second.
 
     If a provider's text must not appear in a public message at all, the
     stronger move is not to embed it: raise a SETT error describing the
@@ -47,7 +48,7 @@ def bound_provider_error_message(
     into the adapter's own error message with no limit (F29, defensive
     audit #2). No concrete secret leak was reproduced against the real
     SDKs, but an HTTP error body or SDK exception can be arbitrarily
-    long and is not something SETT controls the shape of - bounding it
+    long and is not something SETT controls the shape of; bounding it
     here caps what an adapter error message can carry across that
     boundary, regardless of what a given provider decides to put in
     ``str(e)`` in the future.
@@ -144,7 +145,7 @@ class SETTMemoryAccessDeniedError(SETTError):
     Examples: the orchestrator trying to read an agent's PrivateMemory;
     an agent's ``update()`` call trying to publish a ``RiskProfile`` (or
     its reserved pillar fields) into ``UniversalMemory``, which
-    ``RiskProfile``'s own documentation states never happens - this is
+    ``RiskProfile``'s own documentation states never happens; this is
     what makes that a structural guarantee rather than a convention
     every caller has to remember to honour.
     """
@@ -163,13 +164,65 @@ class SETTExpertNotFoundError(SETTError):
     """
 
 
-class SETTLLMAdapterError(SETTError):
+class SETTAdapterError(SETTError):
+    """Common structured failure raised by every external-service adapter.
+
+    ``kind`` deliberately remains optional.  An adapter written for an older
+    SETT release can keep raising ``SETTLLMAdapterError("message")`` or
+    ``SETTServiceAdapterError("message")`` unchanged; callers that need the
+    v0.13 contract can distinguish an undeclared classification from a
+    provider failure that was positively classified.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        kind: AdapterErrorKind | None = None,
+        provider: str | None = None,
+        adapter_name: str | None = None,
+        operation: str | None = None,
+        status_code: int | None = None,
+        retryable: bool | None = None,
+        retry_after_seconds: float | None = None,
+        capability: str | None = None,
+        reason_code: str | None = None,
+    ) -> None:
+        """Store machine-readable failure facts without parsing ``message``."""
+        super().__init__(message)
+        self.kind = kind
+        self.provider = provider
+        self.adapter_name = adapter_name
+        self.operation = operation
+        self.status_code = status_code
+        self.retryable = retryable
+        self.retry_after_seconds = retry_after_seconds
+        self.capability = capability
+        self.reason_code = reason_code
+
+    def safe_view(self) -> dict[str, object]:
+        """Return structured fields only, never the raw provider message."""
+        kind = self.kind
+        return {
+            "kind": getattr(kind, "value", kind),
+            "provider": self.provider,
+            "adapter_name": self.adapter_name,
+            "operation": self.operation,
+            "status_code": self.status_code,
+            "retryable": self.retryable,
+            "retry_after_seconds": self.retry_after_seconds,
+            "capability": self.capability,
+            "reason_code": self.reason_code,
+        }
+
+
+class SETTLLMAdapterError(SETTAdapterError):
     """
     Raised when an LLM adapter fails to respond or is misconfigured.
     """
 
 
-class SETTServiceAdapterError(SETTError):
+class SETTServiceAdapterError(SETTAdapterError):
     """
     Raised when a TTS, STT, sentiment, or generative AI adapter fails
     or is misconfigured.
@@ -246,7 +299,7 @@ class SETTTimeoutError(SETTError):
         message: str,
         *,
         run_id: str | None = None,
-        deadline: "Deadline | None" = None,
+        deadline: Deadline | None = None,
     ) -> None:
         """Name which run ran out of time, and against which deadline."""
         super().__init__(message)
@@ -263,7 +316,7 @@ class SETTDependencyError(SETTError):
     This type exists to keep two mechanisms apart that are easy to
     conflate, and whose conflation produces a specific, real bug: a
     cancellation tree is not a dependency graph. If A is cancelled and B
-    never runs as a consequence, B was NOT cancelled - nobody asked for
+    never runs as a consequence, B was NOT cancelled; nobody asked for
     B to stop, B simply never became reachable. Recording that as a
     cancellation would misattribute a causal skip to a caller decision
     that never happened.

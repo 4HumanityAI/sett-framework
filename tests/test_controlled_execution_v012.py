@@ -2,7 +2,7 @@
 Phase 4 of v0.12.0: the controlled entry points, end to end.
 
 The scenario that motivates the whole version is the last section of this
-file: a voice turn is cancelled mid-flight - a barge-in - and the
+file: a voice turn is cancelled mid-flight, a barge-in, and the
 conversation session it belongs to keeps running. That only works because
 a control is addressed by the same ``run_id`` its trace events carry, so
 an application can cancel exactly the branch it means to.
@@ -484,7 +484,7 @@ def test_a_genuine_stage_failure_does_not_discard_earlier_completed_work():
 
 
 def test_a_stage_failure_on_the_very_first_stage_carries_no_partial_value():
-    """No stage ever completed, so there is nothing to preserve - `value`
+    """No stage ever completed, so there is nothing to preserve; `value`
     stays `None` rather than an empty, misleading PipelineResult."""
     orchestrator = SETTOrchestrator()
     orchestrator.register_agent(ExplodingAgent("first"))

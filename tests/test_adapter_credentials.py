@@ -76,12 +76,61 @@ def _gemini(**kwargs):
         return GeminiAdapter(**kwargs)
 
 
+def _deepgram(**kwargs):
+    from sett.services_tts_stt.deepgram import DeepgramSTTAdapter
+
+    return DeepgramSTTAdapter(**kwargs)
+
+
+def _azure_stt(**kwargs):
+    from sett.services_tts_stt.azure import AzureSTTAdapter
+
+    return AzureSTTAdapter(region="eastus", **kwargs)
+
+
+def _azure_tts(**kwargs):
+    from sett.services_tts_stt.azure import AzureTTSAdapter
+
+    return AzureTTSAdapter(region="eastus", **kwargs)
+
+
+def _assemblyai(**kwargs):
+    from sett.services_tts_stt.assemblyai import AssemblyAISTTAdapter
+
+    return AssemblyAISTTAdapter(**kwargs)
+
+
+def _gladia(**kwargs):
+    from sett.services_tts_stt.gladia import GladiaSTTAdapter
+
+    return GladiaSTTAdapter(**kwargs)
+
+
+def _whisper(**kwargs):
+    from sett.services_tts_stt.openai_audio import WhisperSTTAdapter
+
+    return WhisperSTTAdapter(**kwargs)
+
+
+def _cartesia(**kwargs):
+    from sett.services_tts_stt.cartesia import CartesiaTTSAdapter
+
+    return CartesiaTTSAdapter(voice_id="test-voice", **kwargs)
+
+
 # (label, constructor, environment variable it falls back to)
 KEYED_ADAPTERS = [
     ("ElevenLabsTTSAdapter", _elevenlabs, "ELEVENLABS_API_KEY"),
     ("OpenAIAdapter", _openai, "OPENAI_API_KEY"),
     ("AnthropicAdapter", _anthropic, "ANTHROPIC_API_KEY"),
     ("GeminiAdapter", _gemini, "GOOGLE_API_KEY"),
+    ("DeepgramSTTAdapter", _deepgram, "DEEPGRAM_API_KEY"),
+    ("AzureSTTAdapter", _azure_stt, "AZURE_SPEECH_KEY"),
+    ("AzureTTSAdapter", _azure_tts, "AZURE_SPEECH_KEY"),
+    ("AssemblyAISTTAdapter", _assemblyai, "ASSEMBLYAI_API_KEY"),
+    ("GladiaSTTAdapter", _gladia, "GLADIA_API_KEY"),
+    ("WhisperSTTAdapter", _whisper, "OPENAI_API_KEY"),
+    ("CartesiaTTSAdapter", _cartesia, "CARTESIA_API_KEY"),
 ]
 
 _IDS = [entry[0] for entry in KEYED_ADAPTERS]

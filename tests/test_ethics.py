@@ -576,8 +576,8 @@ class TestThreeLayerIntegration:
     def test_a_careless_expert_cannot_publish_a_raw_risk_profile(self):
         """F02 regression (defensive audit #2).
 
-        The test above only proves a *cooperative* Expert - one that
-        remembers to strip everything sensitive before returning - keeps
+        The test above only proves that a *cooperative* Expert, one that
+        remembers to strip everything sensitive before returning, keeps
         the boundary. Before this fix, nothing in UniversalMemory.update()
         actually enforced it: an Expert that simply forgot, or one built
         adversarially, could publish a raw RiskProfile instance and it
@@ -665,7 +665,7 @@ class TestThreeLayerIntegration:
         """The same boundary, reached without ever constructing a RiskProfile.
 
         A serialized dict with the right field names is just as much a
-        leak as the object itself - RiskProfile.to_dict() produces exactly
+        leak as the object itself, since RiskProfile.to_dict() produces exactly
         this shape.
         """
         from sett import SETTOrchestrator, SETTAgent
@@ -727,7 +727,7 @@ class TestKeywordCanonicalizationPolicy:
         """
         Cyrillic 'а' is a different letter, not a different spelling.
         NFKC correctly leaves it alone, so this stays outside what
-        canonicalization can reach - documented instead of papered over
+        canonicalization can reach, documented instead of papered over
         with an incomplete homoglyph table.
         """
         assert canonicalize_for_keyword_match("hаrm") != "harm"

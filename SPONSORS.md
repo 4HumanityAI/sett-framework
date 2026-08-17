@@ -36,7 +36,7 @@ Each tier includes everything from the tiers below it.
 - Everything above.
 - Priority triage: issues you open get looked at first. This does not
   mean your issue gets fixed first, or ahead of a correctness or safety
-  problem - it means it gets read and answered first.
+  problem; it means it gets read and answered first.
 
 ### $50 / month - Advisor
 - Everything above.
@@ -54,11 +54,11 @@ single month at that tier would be.
 ## A note on public listing
 
 Sponsorship is never refused. What's at my discretion is the *public
-display* of a name, handle, or logo - in this document, the README, or
+display* of a name, handle, or logo, whether in this document, the README, or
 on [4humanityAI.com](https://4humanityai.com). Nothing offensive, no
 hate symbols, no unrelated business plugs, no lookalike or scam
 branding. If something submitted for display doesn't fit, the
-sponsorship stays and I'll reach out about the listing - it's not a
+sponsorship stays and I'll reach out about the listing; it's not a
 reason to decline the sponsorship itself.
 
 ## What sponsorship does not buy
@@ -71,7 +71,7 @@ oversights.
 
 ## Current sponsors
 
-*Nobody yet - you could be the first.*
+*Nobody yet; you could be the first.*
 
 ## Why sponsor a framework instead of an app
 

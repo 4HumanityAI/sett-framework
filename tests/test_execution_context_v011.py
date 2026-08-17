@@ -21,7 +21,7 @@ from sett import (
     TraceRecorder,
     current_execution_context,
 )
-from sett.core_ruler.execution_context import execution_scope
+from sett.core_ruler.execution_context import _is_uuid, execution_scope
 
 
 class EchoExpert(SETTExpert):
@@ -62,6 +62,12 @@ def event_kinds(orchestrator, trace_id):
 
 
 class TestExecutionContext:
+    def test_internal_uuid_validator_accepts_context_ids(self):
+        context = ExecutionContext.create()
+
+        assert _is_uuid(context.trace_id) is True
+        assert _is_uuid("not-a-uuid") is False
+
     def test_root_context_has_distinct_identifiers(self):
         context = ExecutionContext.create()
         assert context.trace_id

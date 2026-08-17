@@ -53,7 +53,7 @@ EXCLUDED_FILE_NAMES = {
 # root (not recursively): MIGRATION_*.md documents a specific past
 # upgrade path. This project has no real external adopters yet, and no
 # release has ever shipped, so there is no obligatory convention to
-# preserve here - the framework does not maintain per-release migration
+# preserve here; the framework does not maintain per-release migration
 # guides at all. Excluding them unconditionally (rather than keeping the
 # current version's guide) avoids the accumulation risk a future minor
 # bump would otherwise carry: nothing here deletes or updates an older

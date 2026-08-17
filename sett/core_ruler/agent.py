@@ -107,7 +107,7 @@ class SETTAgent(ABC):
             SETTValidationError: If name or domain is not a non-empty,
                 non-whitespace string. Checked here (construction time)
                 rather than in the orchestrator's register_agent(), since
-                it's orthogonal to - and must not interfere with -
+                it's orthogonal to, and must not interfere with,
                 register_agent()'s intentional domain-collision/stub-swap
                 behavior (see register_agent()'s docstring).
         """
@@ -153,9 +153,9 @@ class SETTAgent(ABC):
             SETTValidationError: If expert.name is empty or whitespace.
             SETTConfigurationError: If an expert is already registered
                 under this name (F05/F08, defensive audit #2). Unlike
-                SETTOrchestrator.register_agent() - whose domain-keyed
+                SETTOrchestrator.register_agent(), whose domain-keyed
                 "swap the stub for the real agent" replacement is a
-                documented, tested feature - nothing here documents or
+                documented, tested feature, nothing here documents or
                 tests re-registering an expert name as a way to replace
                 it, so a duplicate is treated as the programming error
                 it almost always is: two different experts unintentionally

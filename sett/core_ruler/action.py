@@ -18,7 +18,7 @@ an email SDK, a payment API) and can only describe intent.
 Scope (F19, defensive audit #2): that guarantee covers effects
 submitted as an Action through SETTExecutor. It does not, and cannot,
 prevent application code from performing a side effect directly in
-Python outside this path - propose_action() and any hand-written
+Python outside this path; propose_action() and any hand-written
 integration code remain opt-in and are the calling application's
 responsibility.
 """
@@ -65,7 +65,7 @@ class Action:
     ("payment:invoice-2481") rather than from anything SETT could guess.
 
     Added in v0.12.0 and appended last, so existing positional
-    construction of Action is unaffected. ``None`` - the default - means
+    construction of Action is unaffected. ``None``, the default, means
     this action carries no idempotency guarantee and is never retried
     automatically.
     """

@@ -2,7 +2,7 @@
 Tests for tools/build_release_zip.py.
 
 Packaging hygiene: the release zip must never carry VCS internals,
-tool/build caches, or - per explicit policy, since this project has no
+tool/build caches or, per explicit policy, since this project has no
 real external adopters and maintains no migration-guide convention -
 MIGRATION_*.md files at the project root, regardless of the version they
 claim to document. This exercises included_files()/_is_excluded() against
@@ -68,7 +68,7 @@ def synthetic_project(tmp_path: Path) -> Path:
 
 def test_migration_files_at_root_are_excluded_unconditionally(synthetic_project):
     """No MIGRATION_*.md at the project root ever ships, whatever version
-    it claims to document - there is no per-release guide to preserve."""
+    it claims to document; there is no per-release guide to preserve."""
     (synthetic_project / "MIGRATION_v9.9.md").write_text("current guide\n")
 
     files = brz.included_files(synthetic_project)

@@ -18,15 +18,30 @@ intentionally not carried over here.
 Requires: pip install sett-framework[google-tts-stt]
 """
 from __future__ import annotations
+
 from typing import Any
 
-from sett.core_ruler.lifecycle import pop_lifecycle_kwargs
-from sett.services_google_auth import (
-    google_credentials_from_path,
-    build_google_client,
+from sett.core_ruler.adapter import (
+    AdapterCapabilities,
+    AdapterErrorKind,
+    AdapterKind,
+    CapabilitySupport,
+    ConnectivityRequirement,
+    adapter_call_scope,
+    normalized_adapter_error,
 )
-from sett.services_tts_stt.base import TTSBase, STTBase
-from sett.exceptions import SETTServiceAdapterError
+from sett.core_ruler.lifecycle import pop_lifecycle_kwargs
+from sett.exceptions import (
+    SETTAdapterError,
+    SETTCancelledError,
+    SETTServiceAdapterError,
+    SETTTimeoutError,
+)
+from sett.services_google_auth import (
+    build_google_client,
+    google_credentials_from_path,
+)
+from sett.services_tts_stt.base import STTBase, TTSBase
 
 
 class GoogleTTSAdapter(TTSBase):
@@ -68,7 +83,11 @@ class GoogleTTSAdapter(TTSBase):
             raise SETTServiceAdapterError(
                 "The 'google-cloud-texttospeech' package is required to use "
                 "GoogleTTSAdapter. Install it with: "
-                "pip install sett-framework[google-tts-stt]"
+                "pip install sett-framework[google-tts-stt]",
+                kind=AdapterErrorKind.CONFIGURATION,
+                provider="google_cloud_tts",
+                adapter_name=type(self).__name__,
+                reason_code="adapter.dependency_missing",
             )
 
         credentials = google_credentials_from_path(credentials_path)
@@ -86,37 +105,59 @@ class GoogleTTSAdapter(TTSBase):
         """The container this adapter returns audio in."""
         return "mp3"
 
+    @property
+    def capabilities(self) -> AdapterCapabilities:
+        """The configured language and MP3 output this adapter implements."""
+        return AdapterCapabilities(
+            AdapterKind.TTS,
+            streaming=CapabilitySupport.NO,
+            voice_cloning=CapabilitySupport.NO,
+            partial_results=CapabilitySupport.NO,
+            languages=(self._language_code,),
+            connectivity=ConnectivityRequirement.REMOTE_SERVICE,
+            input_formats=("text",),
+            output_formats=("audio/mpeg",),
+        )
+
     def synthesize(self, text: str, **kwargs: Any) -> bytes:
         """Synthesize speech audio (MP3 bytes) for the given text."""
-        lifecycle = pop_lifecycle_kwargs(kwargs)
-        lifecycle.throw_if_cancelled()
-        try:
-            language_code = kwargs.get("language_code", self._language_code)
-            gender_name = kwargs.get("voice_gender", self._voice_gender).upper()
-            ssml_gender = getattr(
-                self._texttospeech.SsmlVoiceGender,
-                gender_name,
-                self._texttospeech.SsmlVoiceGender.NEUTRAL,
-            )
-
-            response = self._client.synthesize_speech(
-                timeout=lifecycle.effective_timeout(None),
-                input=self._texttospeech.SynthesisInput(text=text),
-                voice=self._texttospeech.VoiceSelectionParams(
-                    language_code=language_code,
-                    ssml_gender=ssml_gender,
-                ),
-                audio_config=self._texttospeech.AudioConfig(
-                    audio_encoding=self._texttospeech.AudioEncoding.MP3,
-                ),
-            )
-            return response.audio_content
-        except SETTServiceAdapterError:
-            raise
-        except Exception as e:
-            raise SETTServiceAdapterError(
-                f"Google Cloud TTS error during synthesize(): {e}"
-            ) from e
+        with adapter_call_scope(self, "synthesize"):
+            lifecycle = pop_lifecycle_kwargs(kwargs)
+            lifecycle.throw_if_cancelled()
+            response_received = False
+            try:
+                language_code = kwargs.get("language_code", self._language_code)
+                gender_name = kwargs.get("voice_gender", self._voice_gender).upper()
+                ssml_gender = getattr(
+                    self._texttospeech.SsmlVoiceGender,
+                    gender_name,
+                    self._texttospeech.SsmlVoiceGender.NEUTRAL,
+                )
+                response = self._client.synthesize_speech(
+                    timeout=lifecycle.effective_timeout(None),
+                    input=self._texttospeech.SynthesisInput(text=text),
+                    voice=self._texttospeech.VoiceSelectionParams(
+                        language_code=language_code,
+                        ssml_gender=ssml_gender,
+                    ),
+                    audio_config=self._texttospeech.AudioConfig(
+                        audio_encoding=self._texttospeech.AudioEncoding.MP3,
+                    ),
+                )
+                response_received = True
+                lifecycle.throw_if_cancelled()
+                return response.audio_content
+            except (SETTCancelledError, SETTTimeoutError, SETTAdapterError):
+                raise
+            except Exception as error:
+                raise normalized_adapter_error(
+                    error,
+                    error_type=SETTServiceAdapterError,
+                    provider="google_cloud_tts",
+                    adapter_name=type(self).__name__,
+                    operation="synthesize",
+                    kind=(AdapterErrorKind.INVALID_RESPONSE if response_received else None),
+                ) from error
 
     def __repr__(self) -> str:
         return f"GoogleTTSAdapter(language_code={self._language_code!r})"
@@ -167,7 +208,11 @@ class GoogleSTTAdapter(STTBase):
             raise SETTServiceAdapterError(
                 "The 'google-cloud-speech' package is required to use "
                 "GoogleSTTAdapter. Install it with: "
-                "pip install sett-framework[google-tts-stt]"
+                "pip install sett-framework[google-tts-stt]",
+                kind=AdapterErrorKind.CONFIGURATION,
+                provider="google_cloud_stt",
+                adapter_name=type(self).__name__,
+                reason_code="adapter.dependency_missing",
             )
 
         credentials = google_credentials_from_path(credentials_path)
@@ -180,34 +225,58 @@ class GoogleSTTAdapter(STTBase):
             adapter_name="GoogleSTTAdapter",
         )
 
+    @property
+    def capabilities(self) -> AdapterCapabilities:
+        """The configured LINEAR16 recognition path this adapter implements."""
+        return AdapterCapabilities(
+            AdapterKind.STT,
+            streaming=CapabilitySupport.NO,
+            voice_cloning=CapabilitySupport.NO,
+            partial_results=CapabilitySupport.NO,
+            languages=(self._language_code,),
+            connectivity=ConnectivityRequirement.REMOTE_SERVICE,
+            input_formats=("audio/linear16",),
+            output_formats=("text",),
+            metadata={"sample_rate_hertz": self._sample_rate_hertz},
+        )
+
     def transcribe(self, audio: bytes, **kwargs: Any) -> str:
         """Transcribe LINEAR16 WAV audio bytes to text."""
-        lifecycle = pop_lifecycle_kwargs(kwargs)
-        lifecycle.throw_if_cancelled()
-        try:
-            language_code = kwargs.get("language_code", self._language_code)
-            sample_rate_hertz = kwargs.get(
-                "sample_rate_hertz", self._sample_rate_hertz
-            )
+        with adapter_call_scope(self, "transcribe"):
+            lifecycle = pop_lifecycle_kwargs(kwargs)
+            lifecycle.throw_if_cancelled()
+            response_received = False
+            try:
+                language_code = kwargs.get("language_code", self._language_code)
+                sample_rate_hertz = kwargs.get(
+                    "sample_rate_hertz", self._sample_rate_hertz
+                )
 
-            response = self._client.recognize(
-                timeout=lifecycle.effective_timeout(None),
-                config=self._speech.RecognitionConfig(
-                    encoding=self._speech.RecognitionConfig.AudioEncoding.LINEAR16,
-                    sample_rate_hertz=sample_rate_hertz,
-                    language_code=language_code,
-                ),
-                audio=self._speech.RecognitionAudio(content=audio),
-            )
-            if not response.results:
-                return ""
-            return response.results[0].alternatives[0].transcript
-        except SETTServiceAdapterError:
-            raise
-        except Exception as e:
-            raise SETTServiceAdapterError(
-                f"Google Cloud STT error during transcribe(): {e}"
-            ) from e
+                response = self._client.recognize(
+                    timeout=lifecycle.effective_timeout(None),
+                    config=self._speech.RecognitionConfig(
+                        encoding=self._speech.RecognitionConfig.AudioEncoding.LINEAR16,
+                        sample_rate_hertz=sample_rate_hertz,
+                        language_code=language_code,
+                    ),
+                    audio=self._speech.RecognitionAudio(content=audio),
+                )
+                response_received = True
+                lifecycle.throw_if_cancelled()
+                if not response.results:
+                    return ""
+                return response.results[0].alternatives[0].transcript
+            except (SETTCancelledError, SETTTimeoutError, SETTAdapterError):
+                raise
+            except Exception as error:
+                raise normalized_adapter_error(
+                    error,
+                    error_type=SETTServiceAdapterError,
+                    provider="google_cloud_stt",
+                    adapter_name=type(self).__name__,
+                    operation="transcribe",
+                    kind=(AdapterErrorKind.INVALID_RESPONSE if response_received else None),
+                ) from error
 
     def __repr__(self) -> str:
         return f"GoogleSTTAdapter(language_code={self._language_code!r})"

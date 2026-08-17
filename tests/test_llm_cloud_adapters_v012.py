@@ -10,7 +10,7 @@ pattern this file now proves for the other three.
 
 None of ``openai``, ``anthropic`` or ``google-generativeai`` are installed
 in this environment (an optional extra each), so these adapters have no
-real end-to-end coverage anywhere in this suite - exactly what both audits
+real end-to-end coverage anywhere in this suite, exactly what both audits
 flagged. What is verified here, with hand-built provider doubles injected
 into ``sys.modules``, is the one thing entirely within SETT's own control:
 that the framework's lifecycle kwargs are popped, checked, and forwarded
@@ -36,6 +36,7 @@ from sett.exceptions import (
     DEFAULT_PROVIDER_ERROR_MAX_LENGTH,
     SETTCancelledError,
     SETTLLMAdapterError,
+    SETTTimeoutError,
     bound_provider_error_message,
 )
 
@@ -92,6 +93,22 @@ def _openai_adapter(fake_openai, **kwargs):
     from sett.services_llm.openai import OpenAIAdapter
 
     return OpenAIAdapter(api_key="sk-test", **kwargs)
+
+
+@pytest.mark.parametrize(
+    "error_type",
+    (SETTLLMAdapterError, SETTCancelledError, SETTTimeoutError),
+)
+def test_openai_constructor_preserves_framework_errors(fake_openai, error_type):
+    error = error_type("framework-owned failure")
+
+    def fail(**kwargs):
+        raise error
+
+    fake_openai.OpenAI = fail
+    with pytest.raises(error_type) as exc_info:
+        _openai_adapter(fake_openai)
+    assert exc_info.value is error
 
 
 def test_openai_forwards_the_effective_timeout(fake_openai, registry):
@@ -211,6 +228,24 @@ def _anthropic_adapter(fake_anthropic, **kwargs):
     return AnthropicAdapter(api_key="sk-ant-test", **kwargs)
 
 
+@pytest.mark.parametrize(
+    "error_type",
+    (SETTLLMAdapterError, SETTCancelledError, SETTTimeoutError),
+)
+def test_anthropic_constructor_preserves_framework_errors(
+    fake_anthropic, error_type
+):
+    error = error_type("framework-owned failure")
+
+    def fail(**kwargs):
+        raise error
+
+    fake_anthropic.Anthropic = fail
+    with pytest.raises(error_type) as exc_info:
+        _anthropic_adapter(fake_anthropic)
+    assert exc_info.value is error
+
+
 def test_anthropic_forwards_the_effective_timeout(fake_anthropic, registry):
     adapter = _anthropic_adapter(fake_anthropic)
     with _control(registry, timeout_seconds=2.0) as control:
@@ -307,6 +342,22 @@ def _gemini_adapter(fake_gemini, **kwargs):
     from sett.services_llm.gemini import GeminiAdapter
 
     return GeminiAdapter(api_key="google-test", **kwargs)
+
+
+@pytest.mark.parametrize(
+    "error_type",
+    (SETTLLMAdapterError, SETTCancelledError, SETTTimeoutError),
+)
+def test_gemini_constructor_preserves_framework_errors(fake_gemini, error_type):
+    error = error_type("framework-owned failure")
+
+    def fail(**kwargs):
+        raise error
+
+    fake_gemini.configure = fail
+    with pytest.raises(error_type) as exc_info:
+        _gemini_adapter(fake_gemini)
+    assert exc_info.value is error
 
 
 def test_gemini_forwards_the_effective_timeout_via_request_options(

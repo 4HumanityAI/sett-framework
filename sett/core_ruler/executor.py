@@ -68,7 +68,12 @@ from sett.core_ruler.lifecycle import (
     cooperative_sleep,
     lifecycle_scope,
 )
-from sett.core_ruler.retry import ErrorClass, RetryPolicy, classify_error, is_retryable
+from sett.core_ruler.resilience import (
+    ErrorClass,
+    RetryPolicy,
+    classify_error,
+    is_retryable,
+)
 from sett.exceptions import (
     SETTCancelledError,
     SETTConfigurationError,
@@ -99,7 +104,7 @@ class HandlerContext:
     this run rather than a number the handler invented.
 
     ``attempt_number`` counts attempts against ``idempotency_key`` as the
-    store itself does - it is 1 on a fresh key and keeps climbing across
+    store itself does; it is 1 on a fresh key and keeps climbing across
     separate calls to ``submit_controlled()`` that reuse the same key,
     not just across retries inside one call. Without a key, there is no
     cross-submission identity to count against, so it falls back to this
@@ -159,7 +164,7 @@ class SETTExecutor:
             idempotency_store: Where keyed operations are remembered. The
                 default is an in-process store, which is enough for tests
                 and single-process applications and explicitly not enough
-                to claim idempotency across restarts - inject a durable
+                to claim idempotency across restarts, so inject a durable
                 one for that.
         """
         self._handlers: dict[str, Callable[[dict[str, Any]], Any]] = {}
@@ -221,7 +226,7 @@ class SETTExecutor:
             SETTConfigurationError: If action_type already has a handler
                 registered, of either kind (F05/F07, defensive audit #2:
                 a silent overwrite here used to also let the two handler
-                maps drift out of sync with each other - see
+                maps drift out of sync with each other; see
                 register_controlled_handler()'s docstring).
         """
         self._register_handler_guard(action_type, handler)
@@ -303,7 +308,7 @@ class SETTExecutor:
         # build the filter's context and again to call the handler. Between
         # those two reads another thread holding the same Action could
         # change it, so policy approved one payload and the handler
-        # performed a different one - and the fingerprint recorded for
+        # performed a different one, and the fingerprint recorded for
         # idempotency belonged to the approved one, not the executed one.
         #
         # "The caller should not mutate it" is not an answer this framework
@@ -490,8 +495,8 @@ class SETTExecutor:
         except (SETTCancelledError, SETTTimeoutError) as error:
             # A handler that stopped because it was cancelled, or because
             # it ran out of time, did not fail. Both are reachable from a
-            # handler today - HandlerContext.throw_if_cancelled() and the
-            # adapters' own checkpoints raise exactly these - and folding
+            # handler today: HandlerContext.throw_if_cancelled() and the
+            # adapters' own checkpoints raise exactly these, and folding
             # them into handler.failed would report the distinction this
             # version exists to draw as though it did not exist.
             if action_context is not None and self._trace_recorder is not None:
@@ -582,7 +587,7 @@ class SETTExecutor:
 
         Registered alongside the legacy handlers rather than replacing
         them: a handler written for v0.11.0 keeps working untouched, and
-        keeps its documented limits - no automatic retries and no strong
+        keeps its documented limits, with no automatic retries and no strong
         timeout guarantee, because nothing about its signature lets SETT
         hand it a deadline or a token.
 
@@ -644,9 +649,9 @@ class SETTExecutor:
         them, with the real exception preserved for ``unwrap()``.
 
         Two things still raise, and deliberately. A failure of the
-        infrastructure this method depends on - an injected
-        ``IdempotencyStore`` that cannot answer, for instance - is not an
-        outcome of the action, it is the inability to determine one, and
+        infrastructure this method depends on, such as an injected
+        ``IdempotencyStore`` that cannot answer, for instance, is not an
+        outcome of the action; it is the inability to determine one, and
         turning it into a FAILED result would report a decision that was
         never made. And ``KeyboardInterrupt``/``SystemExit`` propagate:
         they are the process being told to stop, not this action failing.
@@ -677,7 +682,7 @@ class SETTExecutor:
             # management but no execution scope still means this
             # submission to belong to that run, and deriving from anywhere
             # else would silently place it outside the tree its canceller
-            # is addressing - the effect boundary is the last place to
+            # is addressing, since the effect boundary is the last place to
             # quietly lose cancellability.
             parent_context = parent_control.context
         trace_cause = cause_id or current_trace_cause_id()
@@ -688,7 +693,7 @@ class SETTExecutor:
         )
         # An explicit timeout_seconds always wins. Otherwise, fall back to
         # the LifecyclePolicy's per-action_type handler timeout, resolved
-        # by the orchestrator this executor is registered with - the same
+        # by the orchestrator this executor is registered with, following the same
         # "explicit argument overrides the level default" rule
         # run_pipeline_controlled() already applies to stages.
         effective_timeout = timeout_seconds
@@ -850,7 +855,7 @@ class SETTExecutor:
             # M-02 (defensive audit #3): the loop variable above counts
             # attempts within THIS call to submit_controlled() only, and
             # resets to 1 every time a caller resubmits the same action
-            # after a retryable failure - which is exactly the case an
+            # after a retryable failure, which is exactly the case an
             # idempotency_key exists to identify as the same operation.
             # A caller retried [1, 1] where the store's own record already
             # said attempt_count=2: the number handed to the log and to
@@ -858,7 +863,7 @@ class SETTExecutor:
             # submission boundary. The store already keeps the
             # authoritative count for the key (bumped by reserve() on
             # every successful reservation, including this one), so this
-            # reuses that instead of inventing a second field - the same
+            # reuses that instead of inventing a second field, following the same
             # "one source of truth" shape as validate_duration_seconds()
             # and the H-02 single-read fix. Without a key there is no
             # cross-submission identity to be authoritative about, so the

@@ -7,29 +7,36 @@
 [![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.21287133-blue)](https://doi.org/10.5281/zenodo.21287133)
 [![Sponsor](https://img.shields.io/badge/sponsor-%E2%9D%A4-red)](https://github.com/sponsors/EduDanielV)
 
-**Current source release: 0.12.0** adds lifecycle management - cancellation,
-deadlines, structured outcomes and idempotency - entirely alongside the
-existing API. `ExecutionControl` carries its own `ExecutionContext` rather
-than a hierarchy of its own; subtree cancellation is resolved by walking the
-`parent_id` chain that context tree already maintains, so the `run_id`
-visible in an exported trace event is the identifier that can be cancelled.
-`process_controlled()`, `run_pipeline_controlled()` and `submit_controlled()`
-are new, separate entry points - `process()`, `run_pipeline()` and `submit()`
-are untouched, and the 340 tests of 0.11.0 pass against 0.12.0 unmodified.
-See [`CHANGELOG.md`](CHANGELOG.md) for the full list of additions and fixes.
+**Current source release: 0.13.0** adds provider-neutral adapter capabilities,
+passive health, normalized errors, explicit capability-based selection,
+sanitized adapter tracing, and opt-in retry/circuit breaking. SETT describes
+and filters adapters but never chooses a provider: applications construct,
+name, and order every route themselves. The voice roster now includes
+remote, local, and explicitly community/unofficial implementations, all
+behind the existing `TTSBase`/`STTBase` boundaries. A dependency-free
+`sett.testing` kit lets third-party adapters verify the same contract.
+See [`docs/adapters.md`](docs/adapters.md), the canonical
+[`adapter contract`](docs/adapter_contract.md), and
+[`CHANGELOG.md`](CHANGELOG.md) for details.
+
+Version 0.12.0 added lifecycle management: cancellation, deadlines,
+structured outcomes and idempotency, entirely alongside the existing API.
+Its controlled entry points remain separate from the original synchronous
+API and feed the adapter lifecycle contract used by 0.13.0.
 
 Before that, 0.11.0 introduced immutable, derivable `ExecutionContext`
 objects and complete causal tracing across routing, agents, experts,
 pipelines, governed memory publication, policy decisions, actions, handlers,
 results, rejections, and errors. Traces are tamper-evident, exportable
 through sanitized views, and never inspect private-memory values or record
-application payloads by default. Its upgrade notes are in
-[`CHANGELOG.md`](CHANGELOG.md).
+application payloads by default. Its design is maintained in
+[`docs/execution_context.md`](docs/execution_context.md), and its upgrade notes
+are in [`CHANGELOG.md`](CHANGELOG.md).
 
 Previous release, 0.10.1, hardened documentation and public-tree
 consistency; 0.10.0 added a fourth, optional `PhrasingExpert` hook,
 `verify_facts(phrased, facts, context)`, for validating already-phrased text
-against known facts and swapping it out if it contradicts them - motivated
+against known facts and swapping it out if it contradicts them, motivated
 by two independent downstream subclasses that each needed exactly this.
 See [`CHANGELOG.md`](CHANGELOG.md) for the full entry.
 
@@ -228,7 +235,7 @@ SETT is free and MIT-licensed for everyone, and stays that way.
 [Sponsoring](SPONSORS.md) is a way to help fund maintenance time on the
 framework layer itself.
 
-*Nobody yet - you could be the first. See [`SPONSORS.md`](SPONSORS.md)
+*Nobody yet; you could be the first. See [`SPONSORS.md`](SPONSORS.md)
 for tiers.*
 
 ## Contributing

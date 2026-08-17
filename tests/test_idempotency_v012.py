@@ -782,7 +782,7 @@ def test_an_explicit_submit_controlled_timeout_overrides_the_policy():
 def test_a_cleanup_failure_during_submit_controlled_is_not_dropped():
     """M-01 regression (severe audit): the state used to be built from
     inside `with control`, before control.__exit__() had run cleanup at
-    all - so control.cleanup_errors was necessarily empty at that point
+    all, so control.cleanup_errors was necessarily empty at that point
     no matter what actually happened during unwinding, and a hook that
     failed while cleaning up was silently missing from the result.
     """

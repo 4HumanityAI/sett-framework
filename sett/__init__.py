@@ -19,7 +19,7 @@ Usage:
     from sett import SETTOrchestrator, SETTAgent, SETTExpert, EthicalFilter
 """
 
-__version__ = "0.12.0"
+__version__ = "0.13.0"
 __author__ = "Eduardo Daniel Viñales"
 __license__ = "MIT"
 
@@ -72,7 +72,31 @@ from sett.core_ruler.idempotency import (
     InMemoryIdempotencyStore,
     action_fingerprint,
 )
-from sett.core_ruler.retry import ErrorClass, RetryPolicy, classify_error
+from sett.core_ruler.resilience import (
+    CircuitBreaker,
+    CircuitBreakerPolicy,
+    CircuitState,
+    ErrorClass,
+    RetryPolicy,
+    classify_error,
+    execute_with_resilience,
+)
+from sett.core_ruler.adapter import (
+    AdapterCapabilities,
+    AdapterErrorKind,
+    AdapterErrorView,
+    AdapterHandle,
+    AdapterHealth,
+    AdapterHealthStatus,
+    AdapterKind,
+    AdapterRequirements,
+    AdapterSelection,
+    CapabilitySupport,
+    ConnectivityRequirement,
+    PrioritySelectionPolicy,
+    SelectionPolicy,
+    select_adapter,
+)
 
 # Memory layers
 from sett.memory_ruler.universal import UniversalMemory
@@ -112,6 +136,7 @@ from sett.services_sentiment.base import SentimentBase, SentimentResult, Sentenc
 # Exceptions
 from sett.exceptions import (
     SETTError,
+    SETTAdapterError,
     SETTEthicalFilterRejectedError,
     SETTEthicalFilterWarningError,
     SETTMemoryAccessDeniedError,
@@ -172,6 +197,25 @@ __all__ = [
     "ErrorClass",
     "RetryPolicy",
     "classify_error",
+    "CircuitBreaker",
+    "CircuitBreakerPolicy",
+    "CircuitState",
+    "execute_with_resilience",
+    # Adapter contracts
+    "AdapterCapabilities",
+    "AdapterErrorKind",
+    "AdapterErrorView",
+    "AdapterHandle",
+    "AdapterHealth",
+    "AdapterHealthStatus",
+    "AdapterKind",
+    "AdapterRequirements",
+    "AdapterSelection",
+    "CapabilitySupport",
+    "ConnectivityRequirement",
+    "PrioritySelectionPolicy",
+    "SelectionPolicy",
+    "select_adapter",
     # Memory
     "UniversalMemory",
     "PrivateMemory",
@@ -202,6 +246,7 @@ __all__ = [
     "SentenceSentiment",
     # Exceptions
     "SETTError",
+    "SETTAdapterError",
     "SETTEthicalFilterRejectedError",
     "SETTEthicalFilterWarningError",
     "SETTMemoryAccessDeniedError",

@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Any, Generic, TypeAlias, TypeVar
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from sett.exceptions import SETTValidationError
 
@@ -31,12 +31,12 @@ _MAX_METADATA_BYTES = 16 * 1024
 
 # The single, shared definition of "this attribute/metadata key looks like
 # a secret". Trace attributes (audit_ruler/trace.py) reuse this exact list
-# rather than keeping a second copy - F17 (defensive audit #2): the two
+# rather than keeping a second copy. F17 (defensive audit #2): the two
 # had already diverged, with trace.py's own list including "medical",
 # "health_record" and "biometric" that this one lacked.
 #
-# Fragments are matched against a *normalized* key - separators
-# (underscore, hyphen, space) stripped - rather than the raw lowercased
+# Fragments are matched against a *normalized* key, with separators
+# (underscore, hyphen, space) stripped, rather than the raw lowercased
 # key. A plain substring check misses common spelling variants of the
 # same sensitive field ("apiKey", "x-api-key", "api.key", "private/key")
 # simply because the separator characters differ from the one fragment
@@ -61,7 +61,7 @@ SENSITIVE_KEY_FRAGMENTS: tuple[str, ...] = (
 # Every character that is not a letter or a digit. An earlier version
 # listed the separators it knew about (space, underscore, hyphen), which
 # closed the aliases somebody thought of and left "api.key", "api/key",
-# "api:key" and "api|key" open - the same defect one layer down, since
+# "api:key" and "api|key" open, the same defect one layer down, since
 # the point of normalizing at all is that the separator must not matter.
 # Removing all of them makes the rule "letters and digits decide", which
 # has no list to keep up to date.

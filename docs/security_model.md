@@ -75,7 +75,7 @@ deep copies. Mutating a returned object cannot rewrite internal state.
 `PrivateMemory.read()` and `PrivateMemory.get_all()` return deep copies as well,
 since v0.9.0 (a downstream integrator mutating a nested value read from an
 agent's own workspace could otherwise corrupt stored data without ever calling
-`write()`, with no trace in `get_history()` - the same failure mode the
+`write()`, with no trace in `get_history()`, the same failure mode the
 Universal Memory guarantee above already closed). This paragraph previously
 claimed `PrivateMemory` "intentionally retains normal Python object identity" -
 that was accurate before v0.9.0, but the hardening pass changed it; the text

@@ -15,7 +15,7 @@ correct outcome, not a malfunction.
 
 One status is deliberately absent: there is no ``SKIPPED``. A unit that
 never ran because something it depended on failed was not cancelled and
-did not fail on its own - it never became reachable. That is a property
+did not fail on its own; it never became reachable. That is a property
 of the dependency graph, not of this unit's execution, and it is carried
 by ``SETTDependencyError`` and by the pipeline's own ``SkipCause``. Adding
 ``SKIPPED`` here is what would let a causal skip be silently reported as a
@@ -128,8 +128,8 @@ class ExecutionState:
             # the reason it needed one: every sibling above validates, so
             # a NaN or a negative duration was the one nonsensical value
             # this type would accept and then carry into a report as if it
-            # were measured. It cannot arise from the framework itself -
-            # it comes from the monotonic clock - but ExecutionState is a
+            # were measured. It cannot arise from the framework itself because
+            # it comes from the monotonic clock. However, ExecutionState is a
             # public dataclass an application may build directly.
             object.__setattr__(
                 self,
@@ -217,7 +217,7 @@ class ExecutionResult(Generic[T]):
                 was recorded. Preserving the concrete type is the whole
                 contract here.
             SETTError: For a terminal state that never had a concrete
-                exception behind it - reachable for a PARTIAL result whose
+                exception behind it, reachable for a PARTIAL result whose
                 completed portion is real but whose caller asked for all
                 or nothing. Still a framework error rather than a bare
                 ``RuntimeError``, so ``except SETTError`` remains a

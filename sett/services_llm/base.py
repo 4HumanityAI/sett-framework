@@ -11,8 +11,17 @@ Following the same interchangeability philosophy for TTS/STT in
 services_tts_stt/ and sentiment analysis in services_sentiment/.
 """
 from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from typing import Any
+
+from sett.core_ruler.adapter import (
+    AdapterCapabilities,
+    AdapterHealth,
+    AdapterKind,
+    adapter_health,
+    record_adapter_event,
+)
 
 
 class LLMBase(ABC):
@@ -61,13 +70,13 @@ class LLMBase(ABC):
     Honouring them is strongly encouraged and not enforced: an adapter
     that ignores both still satisfies this interface and still works. What
     it loses is the ability to stop early, and SETT says so plainly rather
-    than pretending otherwise - a provider call already in flight is not
+    than pretending otherwise; a provider call already in flight is not
     something this framework can take back.
 
     What an adapter raises
     ----------------------
     An adapter converts its own failures and its provider's failures into
-    ``SETTLLMAdapterError`` - misconfiguration at construction included.
+    ``SETTLLMAdapterError``, including misconfiguration at construction.
     Callers act on that single type: ``PhrasingExpert``, for one, answers
     with ``fallback_text()`` when it sees one, which is what keeps a
     component useful with no model reachable. A provider or transport
@@ -107,7 +116,6 @@ class LLMBase(ABC):
         Returns:
             The model's text response.
         """
-        pass
 
     @abstractmethod
     def chat(
@@ -128,10 +136,29 @@ class LLMBase(ABC):
         Returns:
             The model's text response.
         """
-        pass
 
     @property
     @abstractmethod
     def model_name(self) -> str:
         """Return the name or identifier of the underlying model."""
-        pass
+    @property
+    def capabilities(self) -> AdapterCapabilities:
+        """Declared behavior; legacy adapters honestly default to UNKNOWN."""
+        return AdapterCapabilities(AdapterKind.LLM)
+
+    @property
+    def health(self) -> AdapterHealth:
+        """Most recent passive observation, initially UNKNOWN."""
+        return adapter_health(self)
+
+    def check_health(self) -> AdapterHealth:
+        """Return current health without hidden or billable provider I/O."""
+        health = self.health
+        record_adapter_event(
+            self,
+            kind="adapter.health_checked",
+            operation="check_health",
+            status=health.status.value,
+            reason_codes=health.reason_codes,
+        )
+        return health

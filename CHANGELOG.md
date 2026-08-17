@@ -2,10 +2,86 @@
 
 All notable changes to the SETT framework are documented here.
 
+## [0.13.0] - 2026-08-16
+
+Provider-neutral adapter contracts, honest capability selection, passive
+health, structured failures, opt-in resilience, and an expanded voice roster.
+
+### Added
+
+- Immutable `AdapterCapabilities`, `AdapterRequirements`, `AdapterHealth`,
+  `AdapterErrorView`, `AdapterHandle`, and `AdapterSelection` contracts, with
+  tri-state capability support and detached JSON-safe views.
+- Pure `select_adapter()` filtering with stable rejection reasons, passive
+  health and circuit-state checks, and caller-owned tie-breaking through
+  `SelectionPolicy` / `PrioritySelectionPolicy`. SETT ships no provider
+  default or recommendation.
+- `SETTAdapterError` as the structured common parent of the existing LLM and
+  service adapter errors. Official adapters normalize authentication, quota,
+  timeout, unavailable, invalid-response, unsupported-capability, and
+  configuration failures while preserving provider exceptions as causes.
+- `CircuitBreaker`, `CircuitBreakerPolicy`, `CircuitState`, and
+  `execute_with_resilience()` in `sett.core_ruler.resilience`. Retry and
+  circuit breaking remain off by default; retry additionally requires an
+  explicit idempotency statement.
+- Sanitized adapter call, health, retry, circuit, and fallback-selection trace
+  events. Prompts, audio, responses, credentials, and raw provider messages
+  are excluded.
+- Remote voice adapters for Deepgram STT, Azure Speech TTS/STT, AssemblyAI
+  STT, Gladia STT, OpenAI-hosted Whisper STT, and Cartesia TTS.
+- Local voice adapters for pyttsx3 TTS, faster-whisper STT, Kokoro TTS, and
+  Piper TTS. Model loading is deferred until first use where applicable.
+- `EdgeTTSAdapter`, explicitly marked community/unofficial because it does
+  not use the supported Azure Speech API.
+- Dependency-free `sett.testing.adapter_contract` checks for third-party
+  adapter capability, health, cancellation, error, and secret-safety
+  contracts.
+- `docs/adapters.md` and `examples/adapter_selection.py`.
+
+### Changed
+
+- `LLMBase`, `TTSBase`, `STTBase`, and `SentimentBase` now provide concrete
+  conservative `capabilities`, `health`, and non-billable `check_health()`
+  members. Existing v0.12 third-party subclasses require no changes.
+- All eight existing official adapters declare only the behavior implemented
+  by their current synchronous path and feed passive health/tracing.
+- Retry implementation moved to `sett.core_ruler.resilience`; the old
+  `sett.core_ruler.retry` module remains as a compatibility re-export.
+- Deadline duration exports retain their configured upper bound despite
+  floating-point cancellation at large monotonic-clock values.
+- `CircuitBreaker` is now included explicitly in the documented concurrency
+  guarantees; its failure accounting and one-time open transition are covered
+  by an 8-thread, 2,000-failure stress test.
+- Late failures from calls already in flight no longer move a circuit's OPEN
+  timestamp or postpone recovery. A failed HALF_OPEN probe still starts a new
+  recovery timeout.
+- The living adapter and execution-context design documents now use stable
+  canonical paths (`docs/adapter_contract.md` and
+  `docs/execution_context.md`). Introduction and review versions live in each
+  document's metadata instead of its filename, preventing parallel contracts
+  in future releases.
+- Prose now favors commas, semicolons, colons, parentheses, or sentence breaks
+  over dash-shaped pauses. Arithmetic operators, Markdown list markers,
+  changelog dates, ranges, glossary separators, and tool directives retain
+  their functional symbols.
+- OpenAI, Anthropic, and Gemini client construction now preserves SETT-owned
+  adapter, cancellation, and timeout exceptions unchanged, matching their
+  real call paths, while provider construction failures remain normalized.
+
+### Fixed
+
+- The internal execution-context conformance helper `_is_uuid()` now imports
+  `UUID` instead of raising `NameError` when called directly.
+
+### Validation
+
+- 995 tests pass, including the complete inherited suite and new v0.13
+  contract, resilience, credential, tracing, and voice-adapter coverage.
+
 ## [0.12.0] - 2026-08-10
 
 Lifecycle management: cancellation, deadlines, structured outcomes and
-idempotency for executions already in flight - together with the
+idempotency for executions already in flight, together with the
 hardening that release auditing of this version turned up, several
 pieces of which fix behaviour that had been wrong since well before it.
 
@@ -20,7 +96,7 @@ pieces of which fix behaviour that had been wrong since well before it.
 - Cooperative cancellation with LIFO cleanup hooks, monotonic deadlines
   that a nested unit can shorten but never extend, `lifecycle_scope()`
   propagation via `contextvars`, and `LifecyclePolicy` for per-level
-  timeout defaults - run, stage, agent, adapter and handler.
+  timeout defaults: run, stage, agent, adapter and handler.
 - `ExecutionStatus`, `ExecutionState` and `ExecutionResult` in
   `sett/core_ruler/execution_result.py`. Six terminal statuses that keep
   an ethical rejection, a cancellation, a deadline and a technical
@@ -72,13 +148,13 @@ These were wrong in v0.11.0 and earlier.
 - A non-finite `risk_score` from a `ContextAnalyzer` reached `ALLOW`.
   `nan >= threshold` is False in Python, so a single NaN cleared the
   reject threshold and the warn threshold and arrived at an allow verdict
-  with no rule having allowed anything - a fail-open in the layer this
+  with no rule having allowed anything, a fail-open in the layer this
   framework exists to make fail-closed. `ContextAnalysis` now refuses a
   score that cannot be compared, at the one type every analyzer must
   return.
 - Policy could approve one payload while the handler performed another.
-  `SETTExecutor.submit()` read the caller's `Action` twice - once to
-  build the filter's context, once to call the handler - and
+  `SETTExecutor.submit()` read the caller's `Action` twice: once to
+  build the filter's context and once to call the handler; and
   `UniversalMemory.update()` read the published result twice. A thread
   still holding the object could change it in between. Both now read once
   at the door and derive everything from that single copy.
@@ -112,21 +188,22 @@ These were wrong in v0.11.0 and earlier.
 - Adapter timeouts skipped the validator this release promised covered
   them. `validate_duration_seconds()` was introduced so one rule would
   serve every duration, and the five adapters holding their own
-  `timeout_seconds` - the three cloud LLM ones, `OllamaAdapter` and
-  `ElevenLabsTTSAdapter` - were the ones it did not reach. An adapter
+  `timeout_seconds`, namely the three cloud LLM ones, `OllamaAdapter` and
+  `ElevenLabsTTSAdapter`, were the ones it did not reach. An adapter
   could hold a `NaN` timeout, which compares False against every bound
   and so is never reached. They validate now, on the same terms as
   everywhere else.
 - An invisible character was enough to lower a `ContextAnalyzer` score.
   Layer 1 matched keywords against the raw text, so `harm` written with a
   zero-width space inside it, or `delete` written in fullwidth
-  characters, scored as ordinary prose. Text is now canonicalized first -
-  format characters dropped, `NFKC`, `casefold` - through the public
+  characters, scored as ordinary prose. Text is now canonicalized first:
+  format characters are dropped, then `NFKC` and `casefold` are applied
+  through the public
   `canonicalize_for_keyword_match()`. What that cannot reach is stated
   under Known limitations rather than implied to be covered.
 - `OllamaAdapter` let a malformed `base_url` escape as a bare
   `ValueError` from urllib, walking through the `SETTLLMAdapterError`
-  protection every caller relies on - `PhrasingExpert` among them, which
+  protection every caller relies on, including `PhrasingExpert`, which
   answers with `fallback_text()` on exactly that type and so lost its
   fallback. A `base_url` that is not an absolute http(s) URL naming a
   host is now refused at construction, where a configuration mistake
@@ -151,8 +228,8 @@ These were wrong in v0.11.0 and earlier.
   `register_controlled_handler()` and `register_analyzer()` refuse a
   duplicate instead of replacing it silently, which was almost always two
   different things unintentionally sharing one name. **Breaking.**
-  `register_agent()` still replaces - that is how a `StubDomainAgent`
-  gives way to the real implementation - but now logs a warning when what
+  `register_agent()` still replaces; that is how a `StubDomainAgent`
+  gives way to the real implementation, but it now logs a warning when what
   it replaced was not a stub.
 - Empty or whitespace-only agent domains, expert names and action types
   are refused at registration.
@@ -180,8 +257,8 @@ These were wrong in v0.11.0 and earlier.
   methods, and fixed by tests, so a later change to either has to be a
   decision instead of a drift. No behaviour changed.
 - `docs/api_reference.md` covers every name in `sett.__all__`. Twelve had
-  no mention at all - the cancellation views, the idempotency types,
-  `action_fingerprint()`, the retry classification - and the four
+  no mention at all: the cancellation views, the idempotency types,
+  `action_fingerprint()` and the retry classification; the four
   lifecycle exceptions had no attribute tables. The concurrency section
   now also names `ExecutionControlRegistry` and
   `InMemoryIdempotencyStore`, which hold their own locks, and its
@@ -196,7 +273,7 @@ These were wrong in v0.11.0 and earlier.
   hand once refills the same way it filled the first time.
 - `docs/SETT_Conventions_v2.md` is now `docs/SETT_Conventions.md`. No
   version of SETT has been published yet, so nobody outside this
-  project has ever linked to the `_v2` name - there is no external
+  project has ever linked to the `_v2` name; there is no external
   reader for whom a `v1` ever existed. Keeping the suffix would only
   invite the question of where that `v1` is. Every in-repo reference
   (code comments, docstrings, tests) was updated to the new name; the
@@ -217,7 +294,7 @@ These were wrong in v0.11.0 and earlier.
 - The per-release `AUDIT_vX.Y.Z.md` file. Only `AUDIT_v0.11.0.md` was
   ever produced under that name; no version before it had one, and this
   release does not restart the pattern. A single instance was never a
-  convention to begin with - the same one-instance-becomes-a-rule
+  convention to begin with, the same one-instance-becomes-a-rule
   mistake Convention #14 exists to catch elsewhere, applied here to
   documentation instead of code. This CHANGELOG entry is the record of
   what was verified for a given release and why; a second in-repo
@@ -261,7 +338,7 @@ These were wrong in v0.11.0 and earlier.
   is frozen, which in Python means its fields cannot be reassigned and
   says nothing about the object a field points at: whoever else holds a
   mutable value can still change it. Same trade-off `Action` makes, and
-  stated for the same reason - what SETT guarantees is that it will not
+  stated for the same reason; what SETT guarantees is that it will not
   change what it handed you, not that nobody can. Code needing a true
   snapshot takes its own `deepcopy()`.
 - The public namespace of the submodules has no formal policy yet. Thirty
@@ -277,14 +354,14 @@ These were wrong in v0.11.0 and earlier.
   "public". What that means here is what they are: named, importable and
   documented in `docs/api_reference.md` with their real import paths,
   rather than literals buried in a module. It does not mean they were
-  added to `sett.__all__` - promoting them to the root namespace would be
+  added to `sett.__all__`; promoting them to the root namespace would be
   settling one corner of the policy above ahead of the rest of it, which
   is exactly the sort of piecemeal decision the freeze exists to avoid.
   Whether they belong at the root is one of the questions v1.0 answers,
   with these two as the worked example.
 - The naming convention for the runtime and configuration primitives this
-  release introduces - `ExecutionControl`, `ExecutionControlRegistry`,
-  `LifecyclePolicy`, `RetryPolicy`, `ExecutionState`/`Result`/`Status` -
+  release introduces (`ExecutionControl`, `ExecutionControlRegistry`,
+  `LifecyclePolicy`, `RetryPolicy`, `ExecutionState`/`Result`/`Status`)
   is not yet ratified in `docs/SETT_Conventions.md`. They violate nothing
   in Conventions #22 and #23; whether the `-Policy`, `-Registry` and
   `-Control` suffixes should become a named category with rules of its
@@ -324,7 +401,7 @@ These were wrong in v0.11.0 and earlier.
 - `tests/test_execution_context_v011.py`, covering context isolation,
   immutability, causal paths, privacy, compatibility, pipelines, broadcasts,
   actions, failures, and fail-closed exporter behavior.
-- `docs/execution_context_v0.11_design.md` and `MIGRATION_v0.11.md`.
+- `docs/execution_context.md` and `MIGRATION_v0.11.md`.
 
 ### Security
 - Traces record operational metadata only. Input payloads, action payloads,
@@ -352,14 +429,14 @@ These were wrong in v0.11.0 and earlier.
   `pytest.importorskip("requests")`. Previously, a bare install (`pip
   install -e .`, without the `[elevenlabs]` extra) made these 12 tests
   FAIL instead of skip, contradicting the project's own documented
-  install instructions. Retroactive fix, applied 2026-07-29 - inherited
+  install instructions. Retroactive fix, applied 2026-07-29, inherited
   unchanged from 0.10.1 and earlier, now fixed here and back-patched
   into every unpublished prior version (0.9.0, 0.10.0, 0.10.1).
 - `docs/api_reference.md`'s Concurrency section now lists `TraceRecorder`
   as a second documented thread-safety exception alongside
   `UniversalMemory`. The guarantee itself was already real (`TraceRecorder`
   has held an internal `threading.RLock()` around `record()` since it was
-  introduced above) - the docs simply hadn't been updated to say so.
+  introduced above); the docs simply hadn't been updated to say so.
   Retroactive fix, applied 2026-08-01, found by an independent public-API
   audit.
 
@@ -378,14 +455,14 @@ These were wrong in v0.11.0 and earlier.
 ## [0.10.1] - 2026-07-28
 
 Four rounds of documentation/consistency fixes, all found and fixed the
-same day, before any of them were published - squashed into this single
+same day, before any of them were published, and squashed into this single
 release rather than four separate ones (same reasoning as v0.7.0's own
 three-pieces-in-one-release precedent: nothing here was ever shipped
 individually, so there is no history to preserve by keeping them apart).
 
 ### Docs
 - `docs/security_model.md` claimed `PrivateMemory` "intentionally retains
-  normal Python object identity" - true before v0.9.0, false since: that
+  normal Python object identity": true before v0.9.0, false since. That
   release changed `read()`/`get_all()` to return `deepcopy()`s (same
   hardening already applied to `UniversalMemory` in v0.8.0), but this
   paragraph was never updated to match. Found by an independent
@@ -395,12 +472,12 @@ individually, so there is no history to preserve by keeping them apart).
   failure mode `UniversalMemory` already closed) spelled out instead of
   just flipping the claim.
 - `docs/api_reference.md`: the `PrivateMemory` method table only said
-  `get_all()` returns a "Copy" (ambiguous - shallow or deep?) and said
+  `get_all()` returns a "Copy" (ambiguous: shallow or deep?) and said
   nothing about `read()`. Both rows now say explicitly "deep copy (since
   v0.9.0)".
 - `sett/services_tts_stt/base.py`'s module docstring had a paragraph in
   Spanish (citing a nonexistent "SETT_Convenciones_v2.md" naming entry)
-  that does not exist in the actual published v0.7.0 source - a local
+  that does not exist in the actual published v0.7.0 source, a local
   corruption introduced at some point after that release, unrelated to
   any real decision. Confirmed against the real published file and
   removed; the docstring now ends where it originally did.
@@ -412,7 +489,7 @@ individually, so there is no history to preserve by keeping them apart).
   to English, for consistency: SETT is a general-purpose framework and its
   own source should read in English throughout, regardless of the fact
   that these particular adapters are language-agnostic and would work
-  identically with text in any language. No behavior change - these were
+  identically with text in any language. No behavior change: these were
   arbitrary example values (several going through fully mocked adapters).
 
 ### Added
@@ -424,14 +501,14 @@ individually, so there is no history to preserve by keeping them apart).
   `sett/services_sentiment/google.py`,
   `tests/test_google_tts_stt_adapters.py`) had pointed at this file since
   v0.7.0, but it only ever existed as a private, Spanish-language working
-  note used to draft the arXiv paper - never shipped, so every one of
+  note used to draft the arXiv paper, which never shipped, so every one of
   those citations was pointing at nothing for anyone outside this
   project. Translated in full and published as `SETT_Conventions_v2.md`;
   every citing site updated from "Convención #N" to "Convention #N" and
   from the old filename to the new one. Two internal-project-name
   mentions found while translating (referring to the companion-assistant
   application by name) were genericized before publishing, consistent
-  with Convention #20 - the guard test below caught both on the first
+  with Convention #20, and the guard test below caught both on the first
   run.
 - `tests/test_no_spanish_in_public_tree.py`: a new guard test, same
   spirit and structure as `test_no_internal_project_names.py`. Scans the
@@ -448,14 +525,14 @@ individually, so there is no history to preserve by keeping them apart).
   automatically the moment the suite ran. Deliberately not a
   grammar-aware classifier: a careless Spanish phrase with zero accented
   characters is rare but theoretically possible and would not be
-  caught - manual review before a release remains the backstop for that
+  caught; manual review before a release remains the backstop for that
   specific gap. Verified against a real regression: temporarily
   reintroducing the original Spanish-docstring mistake makes this test
   fail with the exact offending line reported.
 
 ### Compatibility
 - Documentation and test-suite only. No code logic changed, no public
-  API changed. 290 tests (up from 280 - 10 new, all in
+  API changed. 290 tests (up from 280; 10 new, all in
   `test_no_spanish_in_public_tree.py`).
 
 ## [0.10.0] - 2026-07-28
@@ -475,7 +552,7 @@ individually, so there is no history to preserve by keeping them apart).
   same post-hoc check (a greeting that must never contradict the real
   time of day; a reply that must never assert the wrong name for the
   user) and, with no sanctioned hook for it, each had fully overridden
-  `resolve()` just to insert one verification step - triggering the
+  `resolve()` just to insert one verification step, triggering the
   v0.9.0 override warning in the process. Same origin story as
   `PhrasingExpert` itself (see its class docstring): an unplanned
   repetition across independent call sites is the signal that

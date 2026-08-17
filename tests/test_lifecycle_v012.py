@@ -442,7 +442,7 @@ def test_nan_and_infinite_timeouts_are_rejected():
 
     NaN is the dangerous one: every comparison against it is False, so
     `expired` (`now >= expires_at`) would never become True and a NaN
-    "deadline" would silently never expire. Infinity is refused too - the
+    "deadline" would silently never expire. Infinity is refused too; the
     honest spelling of "no deadline" is `seconds=None`.
     """
     with pytest.raises(SETTValidationError):

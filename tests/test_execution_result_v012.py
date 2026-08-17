@@ -13,7 +13,7 @@ wrapper.
 
 The second is that a cancellation tree is not a dependency graph, now
 that the pipeline is the one feeding the distinction. A stage that never
-ran reports no execution status at all - not CANCELLED - and names the
+ran reports no execution status at all, not CANCELLED, and names the
 stage that made it unreachable.
 """
 from __future__ import annotations

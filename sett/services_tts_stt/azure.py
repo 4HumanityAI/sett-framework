@@ -1,0 +1,207 @@
+"""Azure Speech text-to-speech and short-audio transcription adapters."""
+from __future__ import annotations
+
+from typing import Any
+from urllib.parse import urlencode
+from xml.sax.saxutils import escape, quoteattr
+
+from sett.core_ruler.adapter import (
+    AdapterCapabilities,
+    AdapterErrorKind,
+    AdapterKind,
+    CapabilitySupport,
+    ConnectivityRequirement,
+    adapter_call_scope,
+    normalized_adapter_error,
+)
+from sett.core_ruler.lifecycle import pop_lifecycle_kwargs, validate_duration_seconds
+from sett.exceptions import SETTServiceAdapterError
+from sett.services_tts_stt._http import (
+    checked_request,
+    credential,
+    require_requests,
+    response_json,
+)
+from sett.services_tts_stt.base import STTBase, TTSBase
+
+
+def _speech_key(value: str | None, adapter_name: str) -> str:
+    return credential(
+        value,
+        "AZURE_SPEECH_KEY",
+        provider="azure_speech",
+        adapter_name=adapter_name,
+    )
+
+
+def _region(value: str | None, adapter_name: str) -> str:
+    return credential(
+        value,
+        "AZURE_SPEECH_REGION",
+        provider="azure_speech",
+        adapter_name=adapter_name,
+    )
+
+
+class AzureTTSAdapter(TTSBase):
+    """Synthesize a complete SSML request through Azure Speech."""
+
+    def __init__(
+        self,
+        api_key: str | None = None,
+        region: str | None = None,
+        *,
+        voice: str = "en-US-AvaMultilingualNeural",
+        language: str = "en-US",
+        output_format: str = "audio-24khz-48kbitrate-mono-mp3",
+        endpoint: str | None = None,
+        timeout_seconds: float = 60,
+    ) -> None:
+        """Configure an Azure Speech synthesis resource without contacting it."""
+        require_requests(adapter_name=type(self).__name__, extra="azure-speech")
+        self._api_key = _speech_key(api_key, type(self).__name__)
+        self._region = _region(region, type(self).__name__)
+        self._voice = voice
+        self._language = language
+        self._output_format = output_format
+        self._endpoint = endpoint or (
+            f"https://{self._region}.tts.speech.microsoft.com/cognitiveservices/v1"
+        )
+        self._timeout_seconds = validate_duration_seconds(
+            timeout_seconds, name="timeout_seconds"
+        )
+
+    @property
+    def audio_format(self) -> str:
+        """Return the container implied by the configured Azure output format."""
+        return "mp3" if "mp3" in self._output_format else "wav"
+
+    @property
+    def capabilities(self) -> AdapterCapabilities:
+        """Declare the synchronous Azure SSML implementation capabilities."""
+        return AdapterCapabilities(
+            AdapterKind.TTS,
+            streaming=CapabilitySupport.NO,
+            voice_cloning=CapabilitySupport.NO,
+            partial_results=CapabilitySupport.NO,
+            connectivity=ConnectivityRequirement.REMOTE_SERVICE,
+            input_formats=("text/plain",),
+            output_formats=("audio/mpeg", "audio/wav"),
+            metadata={"request_format": "ssml"},
+        )
+
+    def synthesize(self, text: str, **kwargs: Any) -> bytes:
+        """Synthesize escaped text and return the configured audio bytes."""
+        with adapter_call_scope(self, "synthesize"):
+            lifecycle = pop_lifecycle_kwargs(kwargs)
+            lifecycle.throw_if_cancelled()
+            voice = str(kwargs.get("voice", self._voice))
+            language = str(kwargs.get("language", self._language))
+            output_format = str(kwargs.get("output_format", self._output_format))
+            ssml = (
+                f"<speak version='1.0' xml:lang={quoteattr(language)}>"
+                f"<voice name={quoteattr(voice)}>{escape(text)}</voice></speak>"
+            )
+            response = checked_request(
+                "POST",
+                self._endpoint,
+                provider="azure_speech",
+                adapter_name=type(self).__name__,
+                operation="synthesize",
+                timeout=lifecycle.effective_timeout(self._timeout_seconds),
+                headers={
+                    "Ocp-Apim-Subscription-Key": self._api_key,
+                    "Content-Type": "application/ssml+xml",
+                    "X-Microsoft-OutputFormat": output_format,
+                    "User-Agent": "sett-framework",
+                },
+                data=ssml.encode("utf-8"),
+            )
+            lifecycle.throw_if_cancelled()
+            return response.content
+
+    def __repr__(self) -> str:
+        return f"AzureTTSAdapter(region={self._region!r}, voice={self._voice!r})"
+
+
+class AzureSTTAdapter(STTBase):
+    """Transcribe Azure-compatible WAV or OGG short audio."""
+
+    def __init__(
+        self,
+        api_key: str | None = None,
+        region: str | None = None,
+        *,
+        language: str = "en-US",
+        endpoint: str | None = None,
+        timeout_seconds: float = 120,
+    ) -> None:
+        """Configure an Azure short-audio resource without contacting it."""
+        require_requests(adapter_name=type(self).__name__, extra="azure-speech")
+        self._api_key = _speech_key(api_key, type(self).__name__)
+        self._region = _region(region, type(self).__name__)
+        self._language = language
+        self._endpoint = endpoint or (
+            f"https://{self._region}.stt.speech.microsoft.com/"
+            "speech/recognition/conversation/cognitiveservices/v1"
+        )
+        self._timeout_seconds = validate_duration_seconds(
+            timeout_seconds, name="timeout_seconds"
+        )
+
+    @property
+    def capabilities(self) -> AdapterCapabilities:
+        """Declare the synchronous Azure short-audio implementation."""
+        return AdapterCapabilities(
+            AdapterKind.STT,
+            streaming=CapabilitySupport.NO,
+            voice_cloning=CapabilitySupport.NO,
+            partial_results=CapabilitySupport.NO,
+            connectivity=ConnectivityRequirement.REMOTE_SERVICE,
+            input_formats=("audio/wav", "audio/ogg"),
+            output_formats=("text/plain",),
+            metadata={"api_mode": "short_audio"},
+        )
+
+    def transcribe(self, audio: bytes, **kwargs: Any) -> str:
+        """Transcribe one Azure-compatible short-audio payload."""
+        with adapter_call_scope(self, "transcribe"):
+            lifecycle = pop_lifecycle_kwargs(kwargs)
+            lifecycle.throw_if_cancelled()
+            language = str(kwargs.get("language", self._language))
+            url = f"{self._endpoint}?{urlencode({'language': language})}"
+            response = checked_request(
+                "POST",
+                url,
+                provider="azure_speech",
+                adapter_name=type(self).__name__,
+                operation="transcribe",
+                timeout=lifecycle.effective_timeout(self._timeout_seconds),
+                headers={
+                    "Ocp-Apim-Subscription-Key": self._api_key,
+                    "Content-Type": str(kwargs.get("content_type", "audio/wav")),
+                    "Accept": "application/json",
+                },
+                data=audio,
+            )
+            payload = response_json(
+                response,
+                provider="azure_speech",
+                adapter_name=type(self).__name__,
+                operation="transcribe",
+            )
+            if not isinstance(payload, dict):
+                error = TypeError("Azure Speech returned a non-object response")
+                raise normalized_adapter_error(
+                    error,
+                    error_type=SETTServiceAdapterError,
+                    provider="azure_speech",
+                    adapter_name=type(self).__name__,
+                    operation="transcribe",
+                    kind=AdapterErrorKind.INVALID_RESPONSE,
+                ) from error
+            lifecycle.throw_if_cancelled()
+            return str(payload.get("DisplayText", payload.get("Text", "")))
+
+    def __repr__(self) -> str:
+        return f"AzureSTTAdapter(region={self._region!r}, language={self._language!r})"

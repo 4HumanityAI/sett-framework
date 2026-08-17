@@ -114,8 +114,8 @@ class AppointmentExpert(SETTExpert):
 
     # In a real system, this would query a calendar service
     MOCK_APPOINTMENTS = [
-        {"time": "10:00", "description": "Doctor appointment - Dr. García"},
-        {"time": "15:30", "description": "Medication reminder - take blood pressure pill"},
+        {"time": "10:00", "description": "Doctor appointment: Dr. García"},
+        {"time": "15:30", "description": "Medication reminder: take blood pressure pill"},
     ]
 
     def resolve(self, context):

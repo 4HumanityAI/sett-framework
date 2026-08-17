@@ -15,9 +15,18 @@ parameter since v0.1.1 with the docstring "Detected emotional state
 it. This module is that adapter, not new plumbing.
 """
 from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
+
+from sett.core_ruler.adapter import (
+    AdapterCapabilities,
+    AdapterHealth,
+    AdapterKind,
+    adapter_health,
+    record_adapter_event,
+)
 
 
 @dataclass(frozen=True)
@@ -99,4 +108,24 @@ class SentimentBase(ABC):
             A SentimentResult with document-level score/magnitude and,
             when the adapter supports it, a per-sentence breakdown.
         """
-        pass
+    @property
+    def capabilities(self) -> AdapterCapabilities:
+        """Declared behavior; legacy adapters honestly default to UNKNOWN."""
+        return AdapterCapabilities(AdapterKind.SENTIMENT)
+
+    @property
+    def health(self) -> AdapterHealth:
+        """Most recent passive observation, initially UNKNOWN."""
+        return adapter_health(self)
+
+    def check_health(self) -> AdapterHealth:
+        """Return current health without hidden or billable provider I/O."""
+        health = self.health
+        record_adapter_event(
+            self,
+            kind="adapter.health_checked",
+            operation="check_health",
+            status=health.status.value,
+            reason_codes=health.reason_codes,
+        )
+        return health

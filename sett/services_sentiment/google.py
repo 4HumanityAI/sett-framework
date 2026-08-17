@@ -28,15 +28,34 @@ carried over:
 Requires: pip install sett-framework[google-sentiment]
 """
 from __future__ import annotations
+
 from typing import Any
 
-from sett.core_ruler.lifecycle import pop_lifecycle_kwargs
-from sett.services_google_auth import (
-    google_credentials_from_path,
-    build_google_client,
+from sett.core_ruler.adapter import (
+    AdapterCapabilities,
+    AdapterErrorKind,
+    AdapterKind,
+    CapabilitySupport,
+    ConnectivityRequirement,
+    adapter_call_scope,
+    normalized_adapter_error,
 )
-from sett.services_sentiment.base import SentimentBase, SentimentResult, SentenceSentiment
-from sett.exceptions import SETTServiceAdapterError
+from sett.core_ruler.lifecycle import pop_lifecycle_kwargs
+from sett.exceptions import (
+    SETTAdapterError,
+    SETTCancelledError,
+    SETTServiceAdapterError,
+    SETTTimeoutError,
+)
+from sett.services_google_auth import (
+    build_google_client,
+    google_credentials_from_path,
+)
+from sett.services_sentiment.base import (
+    SentenceSentiment,
+    SentimentBase,
+    SentimentResult,
+)
 
 
 class GoogleSentimentAdapter(SentimentBase):
@@ -69,7 +88,11 @@ class GoogleSentimentAdapter(SentimentBase):
             raise SETTServiceAdapterError(
                 "The 'google-cloud-language' package is required to use "
                 "GoogleSentimentAdapter. Install it with: "
-                "pip install sett-framework[google-sentiment]"
+                "pip install sett-framework[google-sentiment]",
+                kind=AdapterErrorKind.CONFIGURATION,
+                provider="google_cloud_sentiment",
+                adapter_name=type(self).__name__,
+                reason_code="adapter.dependency_missing",
             )
 
         credentials = google_credentials_from_path(credentials_path)
@@ -78,6 +101,20 @@ class GoogleSentimentAdapter(SentimentBase):
             self._language_v1.LanguageServiceClient,
             credentials=credentials,
             adapter_name="GoogleSentimentAdapter",
+        )
+
+    @property
+    def capabilities(self) -> AdapterCapabilities:
+        """Synchronous document and sentence-level sentiment analysis."""
+        return AdapterCapabilities(
+            AdapterKind.SENTIMENT,
+            streaming=CapabilitySupport.NO,
+            voice_cloning=CapabilitySupport.NO,
+            partial_results=CapabilitySupport.NO,
+            connectivity=ConnectivityRequirement.REMOTE_SERVICE,
+            input_formats=("text",),
+            output_formats=("sentiment",),
+            metadata={"sentence_level": True},
         )
 
     def analyze(self, text: str, **kwargs: Any) -> SentimentResult:
@@ -95,35 +132,44 @@ class GoogleSentimentAdapter(SentimentBase):
             a per-sentence breakdown (Google Cloud NL always returns
             sentence-level detail, so it is always populated here).
         """
-        lifecycle = pop_lifecycle_kwargs(kwargs)
-        lifecycle.throw_if_cancelled()
-        try:
-            document = self._language_v1.Document(
-                content=text,
-                type_=self._language_v1.Document.Type.PLAIN_TEXT,
-            )
-            response = self._client.analyze_sentiment(
-                request={"document": document},
-                timeout=lifecycle.effective_timeout(None),
-            )
-            sentences = tuple(
-                SentenceSentiment(
-                    text=sentence.text.content,
-                    score=sentence.sentiment.score,
+        with adapter_call_scope(self, "analyze"):
+            lifecycle = pop_lifecycle_kwargs(kwargs)
+            lifecycle.throw_if_cancelled()
+            response_received = False
+            try:
+                document = self._language_v1.Document(
+                    content=text,
+                    type_=self._language_v1.Document.Type.PLAIN_TEXT,
                 )
-                for sentence in response.sentences
-            )
-            return SentimentResult(
-                score=response.document_sentiment.score,
-                magnitude=response.document_sentiment.magnitude,
-                sentences=sentences,
-            )
-        except SETTServiceAdapterError:
-            raise
-        except Exception as e:
-            raise SETTServiceAdapterError(
-                f"Google Cloud Natural Language error during analyze(): {e}"
-            ) from e
+                response = self._client.analyze_sentiment(
+                    request={"document": document},
+                    timeout=lifecycle.effective_timeout(None),
+                )
+                response_received = True
+                lifecycle.throw_if_cancelled()
+                sentences = tuple(
+                    SentenceSentiment(
+                        text=sentence.text.content,
+                        score=sentence.sentiment.score,
+                    )
+                    for sentence in response.sentences
+                )
+                return SentimentResult(
+                    score=response.document_sentiment.score,
+                    magnitude=response.document_sentiment.magnitude,
+                    sentences=sentences,
+                )
+            except (SETTCancelledError, SETTTimeoutError, SETTAdapterError):
+                raise
+            except Exception as error:
+                raise normalized_adapter_error(
+                    error,
+                    error_type=SETTServiceAdapterError,
+                    provider="google_cloud_sentiment",
+                    adapter_name=type(self).__name__,
+                    operation="analyze",
+                    kind=(AdapterErrorKind.INVALID_RESPONSE if response_received else None),
+                ) from error
 
     def __repr__(self) -> str:
         return "GoogleSentimentAdapter()"

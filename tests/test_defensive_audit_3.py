@@ -257,7 +257,7 @@ def test_an_ordinary_key_is_still_accepted():
 # classify_error() marks the failure PERMANENT rather than TRANSIENT,
 # mark_failed(retryable=False) leaves the record FAILED_FINAL instead of
 # FAILED_RETRYABLE, and the second submit_controlled() call is refused at
-# the reservation step before the handler ever runs a second time - which
+# the reservation step before the handler ever runs a second time, which
 # reads exactly like "could not reproduce" without the bug being fictional.
 # These tests set retry_on explicitly, which is what actually exercises it.
 
@@ -288,7 +288,7 @@ def test_attempt_number_climbs_across_separate_submissions_of_the_same_key():
     assert first.state.status is ExecutionStatus.FAILED
     assert second.state.status is ExecutionStatus.SUCCESS
     assert record.attempt_count == 2
-    # The bug: this used to be [1, 1] - the store's own count, ignored.
+    # The bug: this used to be [1, 1]; the store's own count was ignored.
     assert seen == [1, 2]
 
 
@@ -355,7 +355,7 @@ def test_attempt_number_climbs_across_two_different_executor_instances():
 
 def test_without_a_key_attempt_number_is_still_this_submissions_own_count():
     """No key means no cross-submission identity to be authoritative
-    about, and retries themselves require a key (retry.key_required) - so
+    about, and retries themselves require a key (retry.key_required), so
     the only reachable shape is a single attempt. Falling back to the
     local count for it is honest, not a regression."""
     seen: list[int] = []
@@ -472,7 +472,7 @@ def test_the_credential_helper_no_longer_pre_checks_the_environment():
     """ADC resolves from five sources; checking one refused four.
 
     On GKE that made the framework unusable without a service account key
-    file - the credential type Google recommends avoiding there - so the
+    file, the credential type Google recommends avoiding there, so the
     guard pushed applications toward the weaker option in the name of
     safety.
     """
@@ -515,8 +515,8 @@ def test_from_context_documents_that_a_bad_value_raises():
     """Checks the claim, not the words.
 
     The docstring quotes its own former "never raises" wording while
-    explaining why that stopped being true - the project records
-    corrections rather than rewriting them silently - so searching for
+    explaining why that stopped being true; the project records
+    corrections rather than rewriting them silently, so searching for
     that phrase would flag the explanation. What has to hold is that the
     raising case is documented and that it really raises.
     """

@@ -90,7 +90,7 @@ def test_other_data_carriers_are_not_touched_by_this_change():
     """
     Explicitly not extended per the audit decision: Action still accepts
     any payload without validation, and BiometricReading still accepts
-    any physiologically nonsensical *number* without validation - -999
+    any physiologically nonsensical *number* without validation, including -999
     bpm is a real, finite int, so it is out of range but not mistyped.
     Documents the decision as a passing test, not just a comment.
 
@@ -109,7 +109,7 @@ def test_biometric_reading_rejects_a_mistyped_vital_sign():
 
     Before this fix, a mistyped vital sign (a string where a number was
     expected) constructed successfully and only failed later, with a
-    bare TypeError from inside is_critical's `>`/`<` comparisons - not
+    bare TypeError from inside is_critical's `>`/`<` comparisons, not
     the SETTValidationError this framework raises everywhere else for
     invalid data, and raised far from the value that actually caused it.
     """
@@ -165,7 +165,7 @@ def test_private_memory_write_stores_a_copy_not_the_callers_reference():
     """F09 regression (defensive audit #2).
 
     Before this fix, write() stored the caller's own object. Mutating it
-    after write() returned - without calling write() again - silently
+    after write() returned, without calling write() again, silently
     changed what PrivateMemory reported as stored, with no new entry in
     get_history() to show it happened.
     """

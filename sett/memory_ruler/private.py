@@ -9,7 +9,7 @@ The orchestrator is never handed one.
 This is a design and API-surface convention, not a runtime
 access-control boundary (F24, defensive audit #2): PrivateMemory has
 no capability/ACL enforcement, and any code that does obtain a
-reference to an instance - e.g. by holding onto the agent object -
+reference to an instance, e.g. by holding onto the agent object,
 can call its methods directly. Nothing in this module can stop that;
 what SETT provides is that the normal, documented API never gives the
 orchestrator or another agent that reference in the first place. See
@@ -67,7 +67,7 @@ class PrivateMemory:
         without it, a caller that mutates a list or dict after write()
         returns would silently change what is stored under `key`, with no
         second write() call and nothing in get_history() to show it
-        happened - the same class of gap read()/get_all() were already
+        happened, the same class of gap read()/get_all() were already
         closed against.
         """
         self._store[key] = deepcopy(value)
@@ -131,7 +131,7 @@ class PrivateMemory:
 
         ``list(self._history)`` was a new list of the same dicts, so a
         caller could edit an entry in place and change what this memory
-        reports about a write that already happened - retroactively, and
+        reports about a write that already happened, retroactively and
         without any record that it was edited. Deep-copied for the same
         reason ``read()`` and ``get_all()`` already are: a record of what
         occurred is not something a reader gets to revise.

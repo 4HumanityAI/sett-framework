@@ -20,7 +20,7 @@ def test_no_release_artefact_name_hardcodes_a_version():
 
     ``tools/build_release_zip.py`` named its default archive with a
     literal version, so a v0.12.0 release would have shipped in a file
-    called v0.11.0 - the same mismatch this file was written to prevent,
+    called v0.11.0, the same mismatch this file was written to prevent,
     one layer further out. The tool now derives the name from
     ``sett.__version__``; this makes writing a literal back in fail.
     """

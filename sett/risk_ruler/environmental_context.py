@@ -24,7 +24,7 @@ Privacy design:
     defensive audit #2): `location_id`, `source_domain`, and `message`
     are plain strings, and nothing in this class inspects or rejects
     their content. The caller building an EnvironmentalContext is
-    responsible for keeping personal data out of it - in particular,
+    responsible for keeping personal data out of it; in particular,
     do not put names, biometrics, or other identifiers into `message`.
 """
 from __future__ import annotations
@@ -60,7 +60,7 @@ class EnvironmentalContext:
         # itself from these fields (F25, defensive audit #2: this example
         # previously constructed the object by hand and passed it in, but
         # the Orchestrator's real signature takes the raw fields, not a
-        # ready-made EnvironmentalContext - that call belongs to
+        # ready-made EnvironmentalContext, since that call belongs to
         # UniversalMemory.publish_environmental_context(context), not this
         # one).
 
@@ -94,7 +94,7 @@ class EnvironmentalContext:
     This is a free-text field: nothing in EnvironmentalContext inspects
     or filters its content (F11, defensive audit #2). The caller
     constructing this context is responsible for keeping it free of
-    personal information - it is broadcast to every other instance
+    personal information; it is broadcast to every other instance
     reading this location's environmental context.
     Example: "Elevated biometric indicators detected in environment."
     """
@@ -179,7 +179,7 @@ class EnvironmentalContext:
         F03 fix (defensive audit #2): ``timestamp`` used to be dropped
         here even though ``to_dict()`` always serializes it, so every
         read through UniversalMemory silently replaced the real publish
-        time with the moment it happened to be read - the same class of
+        time with the moment it happened to be read, the same class of
         bug as RiskProfile.from_dict()'s own timestamp loss (F12).
         """
         kwargs: dict[str, Any] = {

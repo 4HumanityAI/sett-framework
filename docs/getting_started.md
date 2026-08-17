@@ -32,6 +32,11 @@ pip install sett-framework[gemini]
 pip install sett-framework[all]
 ```
 
+An adapter must always be explicitly constructed and named by the
+application. SETT has no default LLM, TTS, STT, or sentiment provider. When an
+application has multiple compatible adapters, it supplies its own selection
+policy; see [Adapter contracts](adapters.md).
+
 ---
 
 ## Your first SETT system

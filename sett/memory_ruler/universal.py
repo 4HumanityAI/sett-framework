@@ -37,8 +37,8 @@ if TYPE_CHECKING:
 
 # Reserved key prefix for environmental context entries.
 #
-# One store holds two kinds of entry - agent results under their domain,
-# and environmental contexts under this prefix - and telling them apart
+# One store holds two kinds of entry: agent results under their domain
+# and environmental contexts under this prefix. Telling them apart
 # is what read_all() and read_environmental_context() rely on. A domain
 # that happens to start with the prefix therefore lands in the store as
 # an agent result and is read back as an environmental context: it
@@ -68,8 +68,8 @@ def _reject_reserved_agent_name(agent: str) -> None:
 
     Checked here rather than in ``SETTAgent.__init__`` because the
     namespace belongs to this class: the prefix is defined here, both
-    kinds of entry live in this store, and every write - from an agent or
-    from a direct caller - passes through ``update()``. Validating in the
+    kinds of entry live in this store, and every write, whether from an
+    agent or from a direct caller, passes through ``update()``. Validating in the
     agent constructor as well would put this module's constant in a
     second place to keep in step.
     """
@@ -92,7 +92,7 @@ def _reject_reserved_agent_name(agent: str) -> None:
 def _reject_risk_profile_leak(value: Any, *, agent: str) -> None:
     """Recursively refuse a RiskProfile, or its reserved fields, in ``value``.
 
-    A cooperative Expert never does this - it has no reason to reach for
+    A cooperative Expert never does this; it has no reason to reach for
     these names. What this guards against is an adversarial or simply
     careless one that embeds a raw ``RiskProfile`` instance, or its
     serialized pillar keys, inside the dict it hands to ``update()``. The
@@ -192,9 +192,9 @@ class UniversalMemory:
         The publishing agent's domain is still available, namespaced as
         "_source_agent" to avoid colliding with the agent's own data.
         """
-        # One read of the caller's object, at the door. Everything below -
-        # the leak check, the filter's context, the stored value - is
-        # derived from this single copy and never from `result` again.
+        # One read of the caller's object, at the door. Everything below,
+        # including the leak check, the filter's context and the stored
+        # value, is derived from this single copy and never from `result` again.
         #
         # Reading it twice (once to evaluate, once to store) left a window
         # in which another thread holding the same dict could change it in

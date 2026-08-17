@@ -9,15 +9,30 @@ AnthropicAdapter or OpenAIAdapter.
 Requires: pip install sett-framework[gemini]
 """
 from __future__ import annotations
+
 import os
 from typing import Any
 
+from sett.core_ruler.adapter import (
+    AdapterCapabilities,
+    AdapterErrorKind,
+    AdapterKind,
+    CapabilitySupport,
+    ConnectivityRequirement,
+    adapter_call_scope,
+    normalized_adapter_error,
+)
 from sett.core_ruler.lifecycle import (
     pop_lifecycle_kwargs,
     validate_duration_seconds,
 )
+from sett.exceptions import (
+    SETTAdapterError,
+    SETTCancelledError,
+    SETTLLMAdapterError,
+    SETTTimeoutError,
+)
 from sett.services_llm.base import LLMBase
-from sett.exceptions import SETTLLMAdapterError, bound_provider_error_message
 
 
 class GeminiAdapter(LLMBase):
@@ -63,7 +78,11 @@ class GeminiAdapter(LLMBase):
         except ImportError:
             raise SETTLLMAdapterError(
                 "The 'google-generativeai' package is required to use GeminiAdapter. "
-                "Install it with: pip install sett-framework[gemini]"
+                "Install it with: pip install sett-framework[gemini]",
+                kind=AdapterErrorKind.CONFIGURATION,
+                provider="google_gemini",
+                adapter_name=type(self).__name__,
+                reason_code="adapter.dependency_missing",
             )
 
         self._api_key = (api_key or os.getenv("GOOGLE_API_KEY", "")).strip()
@@ -73,7 +92,11 @@ class GeminiAdapter(LLMBase):
         if not self._api_key:
             raise SETTLLMAdapterError(
                 "Google API key not found. "
-                "Pass api_key= or set the GOOGLE_API_KEY environment variable."
+                "Pass api_key= or set the GOOGLE_API_KEY environment variable.",
+                kind=AdapterErrorKind.CONFIGURATION,
+                provider="google_gemini",
+                adapter_name=type(self).__name__,
+                reason_code="adapter.credentials_missing",
             )
 
         self._model_name = model
@@ -89,10 +112,17 @@ class GeminiAdapter(LLMBase):
             self._model = self._genai.GenerativeModel(
                 model_name=self._model_name
             )
+        except (SETTCancelledError, SETTTimeoutError, SETTAdapterError):
+            raise
         except Exception as error:
-            raise SETTLLMAdapterError(
-                f"The 'google-generativeai' client could not be "
-                f"constructed: {type(error).__name__}: {error}"
+            raise normalized_adapter_error(
+                error,
+                error_type=SETTLLMAdapterError,
+                provider="google_gemini",
+                adapter_name=type(self).__name__,
+                operation="construct",
+                kind=AdapterErrorKind.CONFIGURATION,
+                reason_code="adapter.client_construction_failed",
             ) from error
 
     @property
@@ -100,32 +130,53 @@ class GeminiAdapter(LLMBase):
         """The Gemini model this adapter calls."""
         return self._model_name
 
+    @property
+    def capabilities(self) -> AdapterCapabilities:
+        """Capabilities implemented by this synchronous adapter."""
+        return AdapterCapabilities(
+            AdapterKind.LLM,
+            streaming=CapabilitySupport.NO,
+            voice_cloning=CapabilitySupport.NO,
+            partial_results=CapabilitySupport.NO,
+            connectivity=ConnectivityRequirement.REMOTE_SERVICE,
+            input_formats=("text",),
+            output_formats=("text",),
+            metadata={"operations": ("complete", "chat")},
+        )
+
     def complete(self, prompt: str, system: str = "", **kwargs: Any) -> str:
         """One-shot completion: no conversation history."""
-        lifecycle = pop_lifecycle_kwargs(kwargs)
-        lifecycle.throw_if_cancelled()
-        try:
-            full_prompt = f"{system}\n\n{prompt}".strip() if system else prompt
-            config = self._genai.GenerationConfig(
-                max_output_tokens=kwargs.get("max_tokens", self._max_tokens),
-                temperature=kwargs.get("temperature", self._temperature),
-            )
-            response = self._model.generate_content(
-                full_prompt,
-                generation_config=config,
-                request_options={
-                    "timeout": lifecycle.effective_timeout(
-                        self._timeout_seconds
-                    )
-                },
-            )
-        except Exception as e:
-            raise SETTLLMAdapterError(
-                f"Gemini API error during complete(): "
-                f"{bound_provider_error_message(e)}"
-            ) from e
-        lifecycle.throw_if_cancelled()
-        return response.text if response.text else ""
+        with adapter_call_scope(self, "complete"):
+            lifecycle = pop_lifecycle_kwargs(kwargs)
+            lifecycle.throw_if_cancelled()
+            response_received = False
+            try:
+                full_prompt = f"{system}\n\n{prompt}".strip() if system else prompt
+                config = self._genai.GenerationConfig(
+                    max_output_tokens=kwargs.get("max_tokens", self._max_tokens),
+                    temperature=kwargs.get("temperature", self._temperature),
+                )
+                response = self._model.generate_content(
+                    full_prompt,
+                    generation_config=config,
+                    request_options={
+                        "timeout": lifecycle.effective_timeout(self._timeout_seconds)
+                    },
+                )
+                response_received = True
+                lifecycle.throw_if_cancelled()
+                return response.text if response.text else ""
+            except (SETTCancelledError, SETTTimeoutError, SETTAdapterError):
+                raise
+            except Exception as error:
+                raise normalized_adapter_error(
+                    error,
+                    error_type=SETTLLMAdapterError,
+                    provider="google_gemini",
+                    adapter_name=type(self).__name__,
+                    operation="complete",
+                    kind=(AdapterErrorKind.INVALID_RESPONSE if response_received else None),
+                ) from error
 
     def chat(
         self,
@@ -137,46 +188,53 @@ class GeminiAdapter(LLMBase):
         Multi-turn conversation.
         Converts SETT's role format to Gemini's format.
         """
-        lifecycle = pop_lifecycle_kwargs(kwargs)
-        lifecycle.throw_if_cancelled()
-        try:
-            # Gemini uses "user" and "model" roles (not "assistant")
-            gemini_history = []
-            for msg in messages[:-1]:  # all but the last message
-                role = "model" if msg["role"] == "assistant" else "user"
-                gemini_history.append({
-                    "role": role,
-                    "parts": [msg["content"]],
-                })
+        with adapter_call_scope(self, "chat"):
+            lifecycle = pop_lifecycle_kwargs(kwargs)
+            lifecycle.throw_if_cancelled()
+            response_received = False
+            try:
+                # Gemini uses "user" and "model" roles (not "assistant")
+                gemini_history = []
+                for msg in messages[:-1]:  # all but the last message
+                    role = "model" if msg["role"] == "assistant" else "user"
+                    gemini_history.append({
+                        "role": role,
+                        "parts": [msg["content"]],
+                    })
 
-            config = self._genai.GenerationConfig(
-                max_output_tokens=kwargs.get("max_tokens", self._max_tokens),
-                temperature=kwargs.get("temperature", self._temperature),
-            )
+                config = self._genai.GenerationConfig(
+                    max_output_tokens=kwargs.get("max_tokens", self._max_tokens),
+                    temperature=kwargs.get("temperature", self._temperature),
+                )
 
-            chat_session = self._model.start_chat(history=gemini_history)
+                chat_session = self._model.start_chat(history=gemini_history)
 
-            # Last message is the current user turn
-            last_msg = messages[-1]["content"] if messages else ""
-            if system:
-                last_msg = f"{system}\n\n{last_msg}"
+                # Last message is the current user turn
+                last_msg = messages[-1]["content"] if messages else ""
+                if system:
+                    last_msg = f"{system}\n\n{last_msg}"
 
-            response = chat_session.send_message(
-                last_msg,
-                generation_config=config,
-                request_options={
-                    "timeout": lifecycle.effective_timeout(
-                        self._timeout_seconds
-                    )
-                },
-            )
-        except Exception as e:
-            raise SETTLLMAdapterError(
-                f"Gemini API error during chat(): "
-                f"{bound_provider_error_message(e)}"
-            ) from e
-        lifecycle.throw_if_cancelled()
-        return response.text if response.text else ""
+                response = chat_session.send_message(
+                    last_msg,
+                    generation_config=config,
+                    request_options={
+                        "timeout": lifecycle.effective_timeout(self._timeout_seconds)
+                    },
+                )
+                response_received = True
+                lifecycle.throw_if_cancelled()
+                return response.text if response.text else ""
+            except (SETTCancelledError, SETTTimeoutError, SETTAdapterError):
+                raise
+            except Exception as error:
+                raise normalized_adapter_error(
+                    error,
+                    error_type=SETTLLMAdapterError,
+                    provider="google_gemini",
+                    adapter_name=type(self).__name__,
+                    operation="chat",
+                    kind=(AdapterErrorKind.INVALID_RESPONSE if response_received else None),
+                ) from error
 
     def __repr__(self) -> str:
         return f"GeminiAdapter(model={self._model_name!r})"

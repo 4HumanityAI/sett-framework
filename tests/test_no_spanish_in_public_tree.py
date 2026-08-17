@@ -10,7 +10,7 @@ several Spanish docstrings/comments, an honest mistake from working
 across two projects (one bilingual, one English-only) in the same
 session; (2) a Spanish paragraph had been locally introduced into
 `sett/services_tts_stt/base.py`'s docstring at some point after v0.7.0's
-actual release - confirmed, by comparing against the real published
+actual release, confirmed by comparing against the real published
 source, to never have existed there. Both were caught by manual review
 this time. This test exists so the next one is caught automatically,
 the same day it's introduced, instead of waiting for the next external
@@ -19,14 +19,14 @@ review.
 Detection strategy: Spanish orthography uses accented vowels
 (áéíóúÁÉÍÓÚ), ñ/Ñ, and inverted punctuation (¿¡) far more often than
 English uses any of them at all (English has none of these natively).
-Any real sentence or paragraph of Spanish - as opposed to a single
-word - is virtually certain to contain at least one. This is not a
+Any real sentence or paragraph of Spanish, as opposed to a single
+word, is virtually certain to contain at least one. This is not a
 grammar-aware language classifier: a short, careless Spanish phrase
 with no accented characters (rare in practice, since correctly written
-Spanish uses them constantly - "tambien" instead of "también" is a typo,
+Spanish uses them constantly; "tambien" instead of "también" is a typo,
 not the norm) could in principle slip past it. Manual review before a
 release remains the backstop for that gap, the same way it caught both
-incidents that motivated this test - this closes the "same mistake
+incidents that motivated this test. This closes the "same mistake
 introduced during normal development, unnoticed until the next
 external review" gap, it does not replace review entirely.
 
@@ -34,7 +34,7 @@ False positives this test knows about and explicitly allows, each with
 its own reason (see `_ALLOWED_SNIPPETS`): the framework author's own
 name (a real name is not a language issue), the project's own
 multi-language paper links (each language named in its own script:
-"English, Español, 日本語" - a deliberate list, not prose), a single
+"English, Español, 日本語", a deliberate list rather than prose), a single
 Spanish word used as a necessary illustrative example in
 `test_no_internal_project_names.py` (explaining a false-positive edge
 case for that OTHER guard test), an example surname in a demo script,
@@ -44,7 +44,7 @@ Spanish word that was already found and fixed in an earlier version
 
 Adding a new exception: put the exact snippet in `_ALLOWED_SNIPPETS`
 with a one-line comment saying why. Do not widen the detection pattern
-itself to work around a real one-off leak - fix the source text instead
+itself to work around a real one-off leak; fix the source text instead
 and let the test do its job.
 """
 from __future__ import annotations
@@ -74,11 +74,11 @@ _SELF = Path(__file__).resolve()
 _SPANISH_SIGNAL = re.compile(r"[áéíóúÁÉÍÓÚñÑ¿¡]")
 
 # Exact substrings that are allowed to contain the signal characters
-# above, each for a specific, reviewed reason - not a general escape
+# above, each for a specific, reviewed reason, not a general escape
 # hatch. A flagged line is only cleared if EVERY signal character on it
 # is inside one of these substrings; anything left over still fails.
 _ALLOWED_SNIPPETS = (
-    # The framework author's real name - not a language issue.
+    # The framework author's real name, not a language issue.
     "Viñales",
     # The project's own paper is published in three languages; each is
     # named in its own script in a deliberate list ("English, Español,
@@ -89,7 +89,7 @@ _ALLOWED_SNIPPETS = (
     # name, used to explain why whole-token hashing (not substring
     # matching) is required there. Not prose.
     "recaída",
-    # Example surname in a demo scenario (examples/multi_agent.py) - a
+    # Example surname in a demo scenario (examples/multi_agent.py), a
     # name, not a language choice.
     "García",
     # Historical CHANGELOG entry (v0.6.0-era) quotes, for the record, a
@@ -100,7 +100,7 @@ _ALLOWED_SNIPPETS = (
     # CHANGELOG.md/README.md (v0.10.3) quote the OLD citation label and
     # filename ("Convención #N" / SETT_Convenciones_v2.md) to describe
     # what got renamed to "Convention #N" and (at the time)
-    # SETT_Conventions_v2.md - renamed again, dropping "_v2", in v0.12.0
+    # SETT_Conventions_v2.md, renamed again without "_v2" in v0.12.0
     # (the file is SETT_Conventions.md today). Same "quote the past
     # state to document the fix" pattern as "almacén" above in both
     # cases, not a live citation either time.
@@ -175,7 +175,7 @@ def test_pattern_catches_real_spanish_sentences(text: str) -> None:
         "Author: Eduardo Daniel Viñales",
         "Available in English, Español, 日本語.",
         'the word "recaída" is a necessary example',
-        "Doctor appointment - Dr. García",
+        "Doctor appointment: Dr. García",
         'a leftover Spanish word ("almacén scenario")',
     ],
 )

@@ -6,8 +6,8 @@ one concrete proposal; ``idempotency_key`` identifies the business
 operation out in the world. A retry keeps the key and takes a new attempt.
 
 The key is never derived automatically from ``trace_id``: one trace may
-legitimately contain two different external operations of the same type -
-two reminders in one turn, two messages to two people - and giving them a
+legitimately contain two different external operations of the same type,
+such as two reminders in one turn or two messages to two people. Giving them a
 shared key would make the second one silently vanish as a duplicate.
 Keys are chosen by the application, from its own domain:
 
@@ -166,7 +166,7 @@ def action_fingerprint(action: Any) -> str:
     Raises:
         SETTValidationError: If the payload contains a value ``json.dumps``
             cannot serialize. M-05 (severe audit): this used to fall back
-            to ``default=repr``, which is unstable in both directions - an
+            to ``default=repr``, which is unstable in both directions: an
             object's default ``repr()`` embeds its memory address, so the
             *same* logical payload fingerprints differently every attempt
             (a retry would never match its own first attempt), while two
@@ -210,8 +210,8 @@ def key_digest(key: str) -> str:
     "notification:appointment-992:reminder-24h") asks for exactly the
     kind of business identifier that should not travel in an exported
     trace. The trace already records shape rather than content elsewhere
-    - ``result_type`` instead of the result, ``field_count`` instead of
-    the fields - and this keeps that habit for the one value that was
+    - ``result_type`` instead of the result and ``field_count`` instead of
+    the fields. This keeps that habit for the one value that was
     being written out in full.
 
     Correlation survives: the same key always yields the same digest, so
@@ -261,8 +261,8 @@ class IdempotencyStore(Protocol):
     contract, not an omission: a transition describes something that
     happened to a reservation, and a store with no such reservation has
     nothing to describe. Raising instead would turn a store's own
-    eviction or retention policy - which SETT deliberately does not
-    dictate - into an error in the caller's code path, at the worst
+    eviction or retention policy, which SETT deliberately does not
+    dictate, into an error in the caller's code path, at the worst
     possible moment, after the effect already ran.
 
     ``SETTExecutor`` always reserves before it transitions, so this

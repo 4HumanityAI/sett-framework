@@ -41,7 +41,7 @@ def google_credentials_from_path(credentials_path: str | None) -> Any | None:
     Returns:
         A ``google.auth.credentials.Credentials`` instance to pass as
         ``credentials=`` to a client constructor, or ``None`` when no
-        path was given - in which case the caller passes ``None``
+        path was given, in which case the caller passes ``None``
         through unchanged and the client falls back to Application
         Default Credentials exactly as before this fix.
 
@@ -85,9 +85,9 @@ def build_google_client(
     Replaces an earlier guard that asked whether
     ``GOOGLE_APPLICATION_CREDENTIALS`` was set before allowing the client
     to be built. That guard was wrong in a way worth recording: Application
-    Default Credentials resolve from five sources - that environment
+    Default Credentials resolve from five sources: that environment
     variable, a ``gcloud`` user login, GCE/GKE metadata, Workload Identity,
-    and the well-known config file - and checking one of the five refused
+    and the well-known config file. Checking one of the five refused
     four valid configurations. On GKE it made the framework unusable
     without a service account key file, which is the credential type
     Google recommends avoiding there, so the check pushed applications
@@ -103,8 +103,8 @@ def build_google_client(
     Everything this raises is a ``SETTServiceAdapterError``: a missing
     credential gets the message above, and any other construction failure
     gets a generic one with the original kept as ``__cause__``. SETT's own
-    exceptions - a cancellation or a deadline reaching this from inside
-    ``factory`` - pass through with their type intact.
+    exceptions, such as a cancellation or a deadline reaching this from inside
+    ``factory``, pass through with their type intact.
     """
     try:
         return factory(credentials=credentials)
@@ -126,7 +126,7 @@ def build_google_client(
         # happened to choose. An earlier version re-raised those
         # untranslated, which meant "build a Google client" had one
         # documented failure type and an open-ended set of undocumented
-        # ones - the same enumerate-the-known-failures shape that
+        # ones, following the same enumerate-the-known-failures shape that
         # ``OllamaAdapter._post`` already had to abandon.
         raise SETTServiceAdapterError(
             f"Could not construct the Google client for {adapter_name}: "

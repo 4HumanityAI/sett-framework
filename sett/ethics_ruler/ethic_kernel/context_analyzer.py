@@ -97,7 +97,7 @@ def _validated_risk_score(score: object) -> float:
     Every verdict in SETT comes from comparing this number against the
     ruleset's thresholds, and Python answers ``float("nan") >= anything``
     with ``False``. A single non-finite score therefore clears the reject
-    threshold *and* the warn threshold and arrives at ALLOW - a fail-open
+    threshold *and* the warn threshold and arrives at ALLOW, a fail-open
     in the one layer this framework exists to make fail-closed. An
     analyzer can produce one without any bad intent: a division by a
     count that turned out to be zero, a model returning an unexpected
@@ -105,7 +105,7 @@ def _validated_risk_score(score: object) -> float:
 
     Validated here rather than in ``EthicalFilter`` because this is the
     one type every analyzer must return, so it is the only chokepoint
-    that cannot be bypassed by a custom analyzer - and validating in both
+    that cannot be bypassed by a custom analyzer; validating in both
     places would create two rules that have to agree, which is the drift
     this project has already had to remove once.
 
@@ -185,7 +185,7 @@ class ContextAnalyzer:
     -----------------------------------------
     Layer 1 here is a keyword heuristic. It exists so that an application
     that has registered no analyzer of its own still gets a non-zero,
-    roughly-right score instead of silence - the same fail-honest
+    roughly-right score instead of silence, following the same fail-honest
     scaffolding idea as ``StubDomainAgent``. It is a floor, not a policy.
 
     It is deliberately not the thing standing between a critical action

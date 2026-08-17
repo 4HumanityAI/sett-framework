@@ -8,6 +8,35 @@ All public symbols can be imported directly from the `sett` package:
 from sett import SETTOrchestrator, SETTAgent, SETTExpert, EthicalFilter, RiskLevel, ...
 ```
 
+## Adapter contracts and resilience
+
+`AdapterCapabilities`, `AdapterRequirements`, `AdapterHealth`,
+`AdapterHealthStatus`, `AdapterErrorView`, `AdapterHandle`, and
+`AdapterSelection` provide immutable, provider-neutral descriptions.
+`AdapterKind` identifies LLM, TTS, STT, and sentiment interfaces;
+`ConnectivityRequirement` identifies none, local-service, remote-service, or
+unknown connectivity. `select_adapter(candidates, requirements, *,
+policy=None)` filters without performing I/O and requires a caller-owned
+`SelectionPolicy` such as `PrioritySelectionPolicy` to break a tie.
+`CapabilitySupport` distinguishes `YES`, `NO`, and `UNKNOWN`.
+
+`SETTAdapterError` is the common parent of `SETTLLMAdapterError` and
+`SETTServiceAdapterError`. `AdapterErrorKind` provides authentication, quota,
+provider-timeout, unavailable, invalid-response, unsupported-capability,
+configuration, and unknown categories.
+
+`CircuitBreaker`, `CircuitBreakerPolicy`, `CircuitState`, and
+`execute_with_resilience()` are opt-in. A circuit's recovery timeout starts at
+its transition to OPEN; later failures from calls already in flight are counted
+without postponing recovery. A failed HALF_OPEN probe starts a new timeout.
+Retry also requires an explicit `RetryPolicy` and an idempotency statement. The compatibility module
+`sett.core_ruler.retry` continues to re-export the retry API; new code may use
+`sett.core_ruler.resilience`.
+
+Concrete voice adapters are exported by `sett.services_tts_stt`. See
+[Adapter contracts](adapters.md) for the complete roster and the reusable
+`sett.testing` contract kit.
+
 ---
 
 ## core_ruler
@@ -173,7 +202,7 @@ closure for instrumented boundaries.
 `verify(trace_id=None)` semantics (F28, defensive audit #2): the hash chain
 this recorder maintains is global, over every event it has ever recorded,
 not one chain per trace. Passing `trace_id` only adds a check that at least
-one event with that `trace_id` exists in the chain - it does not scope the
+one event with that `trace_id` exists in the chain; it does not scope the
 verification to that trace's events alone. Corruption anywhere in the
 recorder's history, including in an unrelated trace, will make
 `verify(trace_id="...")` return `False` for every trace_id, not just the
@@ -252,7 +281,7 @@ Return types (all frozen dataclasses, importable from `sett`):
 | `PipelineResult` | `completed`, `steps`, `output` (final stage's output when completed), `rejection` |
 | `SkipCause` (v0.12.0) | `domain`, `run_id`, `reason_code` - which stage made a later one unreachable, and why. Set only on a `StageOutcome` whose `status` is `"skipped"`. A cancellation tree is not a dependency graph: a stage that never ran because an earlier one stopped was not itself cancelled, so this is a reference to the stage that stopped, not a status on the one that never started. |
 
-All three v0.12.0 additions on `StageOutcome` default to `None` and are appended last, so existing positional construction is unaffected. `execution_status` is `None` exactly when the stage never executed - there is no `ExecutionStatus.SKIPPED` (see below); giving a stage that never ran an execution outcome would claim somebody stopped it. A genuine stage failure does not discard the outcomes already collected from earlier, completed stages: `ExecutionResult.value` on a `FAILED` controlled-pipeline result still carries the `PipelineResult` with those stages' outputs, the same guarantee `PARTIAL` makes.
+All three v0.12.0 additions on `StageOutcome` default to `None` and are appended last, so existing positional construction is unaffected. `execution_status` is `None` exactly when the stage never executed; there is no `ExecutionStatus.SKIPPED` (see below), since giving a stage that never ran an execution outcome would claim somebody stopped it. A genuine stage failure does not discard the outcomes already collected from earlier, completed stages: `ExecutionResult.value` on a `FAILED` controlled-pipeline result still carries the `PipelineResult` with those stages' outputs, the same guarantee `PARTIAL` makes.
 
 ```python
 from sett import PipelineStep
@@ -478,7 +507,7 @@ orchestrator.register_agent(HealthAgent())  # replaces the stub
 
 ### PrivateMemory
 
-Exclusive memory belonging to one agent. Only the experts within that agent are given a reference to it, and the orchestrator is never given one - an API-surface convention, not a runtime capability check (F24, defensive audit #2). See PrivateMemory's own docstring for the full rationale.
+Exclusive memory belonging to one agent. Only the experts within that agent are given a reference to it, and the orchestrator is never given one. This is an API-surface convention rather than a runtime capability check (F24, defensive audit #2). See PrivateMemory's own docstring for the full rationale.
 
 ```python
 PrivateMemory(owner)
@@ -493,7 +522,7 @@ PrivateMemory(owner)
 | Method | Returns | Description |
 |---|---|---|
 | `write(key, value)` | `None` | Store any Python value under `key`. |
-| `read(key, default=None)` | `Any` | Read a value by key. Returns `default` if not found. Returns a **deep copy** (since v0.9.0) - mutating the returned value never affects stored state. |
+| `read(key, default=None)` | `Any` | Read a value by key. Returns `default` if not found. Returns a **deep copy** (since v0.9.0), so mutating the returned value never affects stored state. |
 | `get_all()` | `dict` | **Deep copy** of all stored values (since v0.9.0). |
 | `clear()` | `None` | Remove all values. |
 | `get_history()` | `list[dict]` | Full write history for auditing. |
@@ -927,7 +956,7 @@ analyzer can apply the same rule rather than inventing a second one.
 It does **not** defeat homoglyphs, and no keyword list can: Cyrillic `а`
 is a different letter from Latin `a`, not a different spelling of it, and
 `NFKC` correctly leaves it alone. Layer 1 is fail-honest scaffolding for
-an application that has registered no analyzer of its own - a floor, not
+an application that has registered no analyzer of its own, a floor rather than
 a policy. What guards a critical action is a domain analyzer registered
 with `register_analyzer()`, plus `SETTExecutor` resolving handlers by
 exact `action_type` and failing closed without one.
@@ -1001,7 +1030,7 @@ The one gate for real side effects submitted through it as `Action`s
 (`submit()`/`submit_controlled()`): evaluates them through the
 `EthicalFilter`, and executes the registered handler only if approved.
 This is a structural guarantee for the `Action`/`SETTExecutor` path
-specifically (F19, defensive audit #2) - it cannot intercept a side
+specifically (F19, defensive audit #2); it cannot intercept a side
 effect performed directly in application code outside this path,
 including via `propose_action()`.
 
@@ -1258,21 +1287,22 @@ Frozen dataclass.
 
 ## Concurrency
 
-SETT's core components (`UniversalMemory`, `EthicalFilter`, `SETTExecutor`, `PrivateMemory`) are not evaluated under concurrent access, with four documented exceptions:
+SETT's core components (`UniversalMemory`, `EthicalFilter`, `SETTExecutor`, `PrivateMemory`) are not evaluated under concurrent access, with five documented exceptions:
 
 - `UniversalMemory` holds an internal lock around its store and history so that concurrent `update()` / `read()` / `publish_environmental_context()` calls do not corrupt shared state.
 - `TraceRecorder` (see above) holds its own internal `threading.RLock()` around `record()` so that concurrent tracing calls from multiple threads do not lose events or corrupt the hash chain - verified under a stress test of 8 concurrent threads each recording 200 events (1600 events total, zero loss, `verify()` returns `True` afterward).
 - `ExecutionControlRegistry` (v0.12.0) holds an internal `threading.RLock()` around registration, release, snapshot, lookup, subtree cancellation, callback registration and `wait()`. This one is not optional: cancellation exists to be requested from a thread other than the one running the work, so a registry that was not safe to share would have nothing to offer. Registration and subtree cancellation take the same lock, which is what closes the window where a control registering just after its ancestor was cancelled could miss it. Observing cancellation afterwards is a lock-free `Event.is_set()`, because checkpoints run far more often than cancellations happen.
 - `InMemoryIdempotencyStore` (v0.12.0) holds an internal `threading.RLock()` around its records and its attempt log, so two threads reserving the same key cannot both come back holding it.
+- `CircuitBreaker` (v0.13.0) holds an internal `threading.RLock()` around state transitions, failure counts and half-open probe admission. One instance may be shared by concurrent callers: a stress test with 8 threads recording 250 transient failures each preserves all 2,000 failures and opens the circuit exactly once. This guarantee covers the breaker's own in-process state, not the adapter calls it guards.
 
-The scope of those last two is deliberately narrow: the store and the registry protect *their own* state within one process. Neither extends any guarantee to the work being controlled. A handler, an adapter, an agent or a cleanup callback reached through them is on its own, exactly as everything else in this section. `InMemoryIdempotencyStore` in particular is a within-process guarantee only, and says nothing at all about what happened before the process started - a durable store is what an application injects when it needs more than that.
+The scope of the registry, idempotency store, and circuit breaker is deliberately narrow: they protect *their own* state within one process. None extends any guarantee to the work being controlled. A handler, an adapter, an agent or a cleanup callback reached through them is on its own, exactly as everything else in this section. `InMemoryIdempotencyStore` in particular is a within-process guarantee only, and says nothing at all about what happened before the process started; an application injects a durable store when it needs more than that.
 
 Outside of those four guarantees, SETT does not currently make a thread-safety claim for the framework as a whole: no adapter, agent base class, or expert base class has been tested under concurrent access, and none advertises being safe for it. This applies to `PrivateMemory`, `EthicalFilter`'s audit log, `SETTExecutor`'s audit log, and the LLM/TTS/STT/sentiment adapters equally.
 
 Practical implications for a deployment:
 
 - Running multiple `SETTOrchestrator` instances in separate processes or async tasks, each with its own agents, is the supported pattern for parallelism today (this is exactly what `EnvironmentalContext` and `publish_environmental_context()` exist to coordinate across instances).
-- Sharing a single `SETTAgent`, `PrivateMemory`, or `EthicalFilter` instance across multiple threads or concurrent coroutines without external synchronization is not a tested configuration. `TraceRecorder`, `ExecutionControlRegistry` and `InMemoryIdempotencyStore` are the exceptions: they are built to be shared across threads.
+- Sharing a single `SETTAgent`, `PrivateMemory`, or `EthicalFilter` instance across multiple threads or concurrent coroutines without external synchronization is not a tested configuration. `TraceRecorder`, `ExecutionControlRegistry`, `InMemoryIdempotencyStore`, and `CircuitBreaker` are exceptions: they are built to be shared across threads.
 - An STT adapter's `transcribe()` being called concurrently for overlapping audio streams is an application-layer concern: guard it in the calling Expert or Agent, not inside the adapter (this mirrors why `STTBase` deliberately does not own a listening loop or a lock itself).
 
 This is a documentation gap being closed, not a new restriction: the underlying behavior has not changed. A future release may extend the same lock-based pattern already used by `UniversalMemory` and `TraceRecorder` to other shared components if a real deployment need appears.
@@ -1288,13 +1318,13 @@ All SETT exceptions inherit from `SETTError`.
 | `SETTError` | Base class for all SETT exceptions. |
 | `SETTEthicalFilterRejectedError` | The EthicalFilter blocks an action or memory write. Carries structured attributes (see below) in addition to the readable message. |
 | `SETTEthicalFilterWarningError` | Reserved for a future warning-as-exception path. **Not currently raised** (F23, defensive audit #2): a WARN verdict today is allowed through and logged via `logging`, not raised. |
-| `SETTMemoryAccessDeniedError` | An `UniversalMemory.update()` call would publish a raw `RiskProfile` or one of its reserved pillar fields into shared memory - the structural enforcement of the promise that `RiskProfile` never leaves `PrivateMemory` (see `RiskProfile`'s docs). |
+| `SETTMemoryAccessDeniedError` | An `UniversalMemory.update()` call would publish a raw `RiskProfile` or one of its reserved pillar fields into shared memory, structurally enforcing the promise that `RiskProfile` never leaves `PrivateMemory` (see `RiskProfile`'s docs). |
 | `SETTAgentNotFoundError` | The orchestrator cannot find a registered agent for the requested domain. |
 | `SETTExpertNotFoundError` | An agent cannot find a registered expert by name. |
 | `SETTLLMAdapterError` | An LLM adapter fails to respond or is misconfigured (missing API key, network error, etc.). |
 | `SETTServiceAdapterError` | A TTS, STT, or generative AI adapter fails or is misconfigured. |
 | `SETTConfigurationError` | The framework or a component is incorrectly configured before the system starts. |
-| `SETTCancelledError` | Somebody asked for this execution to stop - a `cancel()` call on it or on an ancestor. Carries structured attributes (see below). |
+| `SETTCancelledError` | Somebody asked for this execution to stop, through a `cancel()` call on it or on an ancestor. Carries structured attributes (see below). |
 | `SETTTimeoutError` | An `ExecutionControl` exceeded its `Deadline`. Nobody asked; the work did not fit in the time it was given, which is frequently retryable. Carries structured attributes (see below). |
 | `SETTDependencyError` | A unit never became reachable because something it needed failed. Deliberately not a cancellation: nobody ever asked anything of it. Carries structured attributes (see below). |
 | `SETTIdempotencyConflictError` | An `idempotency_key` was reused with a payload that fingerprints differently, which means two different actions are claiming one identity. Carries structured attributes (see below). |
@@ -1349,7 +1379,7 @@ message keeps working.
 
 | Attribute | Type | Meaning |
 |---|---|---|
-| `e.run_id` | `str \| None` | The execution node that observed the cancellation - the same `run_id` its trace events carry. |
+| `e.run_id` | `str \| None` | The execution node that observed the cancellation, using the same `run_id` its trace events carry. |
 | `e.reason` | `str \| None` | Reason code from the trace vocabulary, e.g. `"execution.cancelled_by_caller"`. |
 | `e.cause_event_id` | `str \| None` | The trace event that requested the cancellation, linking a cancelled terminal back to the request. |
 
@@ -1405,7 +1435,7 @@ cleanup hooks run inside `__enter__`, because Python does not call
 ## `ExecutionControlRegistry`
 
 Indexes live controls by `run_id`. The parent relation is owned by each
-control's `ExecutionContext` - `parent_id` is read from there and never
+control's `ExecutionContext`; `parent_id` is read from there and never
 duplicated as state a node could disagree with. On top of that, the
 registry keeps a derived children index, built at registration time from
 those same `parent_id` values, so cancelling a subtree does not have to
@@ -1492,7 +1522,7 @@ conventions.
 | Field | Type | Notes |
 |---|---|---|
 | `action_id` | `str` | |
-| `idempotency_key` | `str \| None` | Pass this through to a provider that supports idempotent requests - the only place an "at most once" guarantee can actually be enforced. |
+| `idempotency_key` | `str \| None` | Pass this through to a provider that supports idempotent requests, the only place an "at most once" guarantee can actually be enforced. |
 | `attempt_id` | `str` | Unique per attempt, not per action. |
 | `attempt_number` | `int` | 1 on the first try. |
 | `execution_context` | `ExecutionContext \| None` | |
@@ -1507,7 +1537,7 @@ loops or polls internally.
 Cancellation is split into two objects on purpose. `CancellationSource`
 is the authority to cancel and stays with whoever started the work;
 `CancellationToken` observes only and is what travels downward into
-agents, experts and adapters. Neither holds state of its own - both are
+agents, experts and adapters. Neither holds state of its own; both are
 views over `ExecutionControlRegistry`, which is why a token handed to an
 adapter cannot go stale or disagree with the control it came from.
 
@@ -1545,7 +1575,7 @@ nothing to check.
 
 `lifecycle_scope(control)` binds one as active for the duration of a
 `with` block. It mirrors `execution_scope()` from `execution_context.py`
-deliberately - the two sit side by side at every instrumented boundary,
+deliberately, with the two sitting side by side at every instrumented boundary,
 one carrying identity, the other carrying permission to continue.
 
 ```python
@@ -1573,8 +1603,8 @@ idempotency across restarts.
 **Transitioning an unknown key is a silent no-op, and that is the
 contract.** A transition describes something that happened to a
 reservation; a store with no such reservation has nothing to describe.
-Raising instead would turn a store's own retention or eviction policy -
-which SETT deliberately does not dictate - into an error in the caller's
+Raising instead would turn a store's own retention or eviction policy,
+which SETT deliberately does not dictate, into an error in the caller's
 path, after the effect already ran. `SETTExecutor` always reserves before
 it transitions, so its own path never reaches that branch; it is stated
 because the Protocol is public. The same applies to `complete_attempt()`
@@ -1602,7 +1632,7 @@ with an attempt id the store never issued.
 
 `IdempotencyStatus`: `RESERVED`, `IN_PROGRESS`, `SUCCEEDED`,
 `FAILED_RETRYABLE`, `FAILED_FINAL`. `FAILED_FINAL` covers the case that
-matters most - an attempt whose outcome is unknown because the connection
+matters most, an attempt whose outcome is unknown because the connection
 dropped after the request went out. Not knowing whether the effect
 happened is a reason to stop, not a reason to try again.
 
@@ -1639,7 +1669,7 @@ different serialization paths are the same action (`1500` and `1500.0`);
 Raises `SETTValidationError` when the payload contains something
 `json.dumps` cannot serialize, rather than falling back to hashing a
 `repr()`. A default `repr()` embeds a memory address, so the same logical
-payload would fingerprint differently on every attempt - reuse detection
+payload would fingerprint differently on every attempt, causing reuse detection
 that always misses.
 
 ## `RetryPolicy`, `ErrorClass` and `classify_error()`

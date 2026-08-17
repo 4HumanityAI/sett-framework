@@ -120,8 +120,8 @@ class RiskProfile:
             # F15 fix (defensive audit #2): a mistyped pillar (a string,
             # for instance) used to escape as a bare TypeError from the
             # `<=` comparison below rather than the documented
-            # SETTValidationError, and `bool` - a real int subclass in
-            # Python - was silently accepted as 0.0/1.0 since
+            # SETTValidationError, and `bool`, a real int subclass in
+            # Python, was silently accepted as 0.0/1.0 since
             # `0.0 <= True <= 1.0` is simply True.
             if not isinstance(value, (int, float)) or isinstance(value, bool):
                 raise SETTValidationError(
@@ -189,7 +189,7 @@ class RiskProfile:
         ``RiskProfile`` instances are deep-copied throughout this
         framework (PrivateMemory.write(), UniversalMemory storage,
         ExecutionResult payloads). The default ``copy.deepcopy`` cannot
-        handle a ``MappingProxyType`` on its own - it is not picklable -
+        handle a ``MappingProxyType`` on its own because it is not picklable,
         so without this override, freezing ``_weights`` for F13 would
         break every one of those call sites. Sharing the same proxy
         across copies is safe precisely because it is read-only: there is
@@ -275,7 +275,7 @@ class RiskProfile:
         here even though ``to_dict()`` always serializes it, so every
         roundtrip through PrivateMemory silently replaced the moment this
         assessment was actually made with whatever moment it happened to
-        be reconstructed - the same class of bug as
+        be reconstructed, the same class of bug as
         EnvironmentalContext.from_dict()'s own timestamp loss (F03).
         """
         kwargs: dict[str, Any] = {

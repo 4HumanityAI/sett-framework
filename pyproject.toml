@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sett-framework"
-version = "0.12.0"
+version = "0.13.0"
 description = "Scalable Expert-based Task Topology: A multi-agent AI development framework"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -39,6 +39,18 @@ gemini          = ["google-generativeai>=0.8.0"]
 google-tts-stt  = ["google-cloud-texttospeech>=2.16.0", "google-cloud-speech>=2.26.0"]
 google-sentiment = ["google-cloud-language>=2.13.0"]
 elevenlabs      = ["requests>=2.31.0"]
+voice-http      = ["requests>=2.31.0"]
+deepgram        = ["requests>=2.31.0"]
+azure-speech    = ["requests>=2.31.0"]
+assemblyai      = ["requests>=2.31.0"]
+gladia          = ["requests>=2.31.0"]
+openai-audio    = ["requests>=2.31.0"]
+cartesia        = ["requests>=2.31.0"]
+local-tts       = ["pyttsx3>=2.90"]
+local-stt       = ["faster-whisper>=1.0.0"]
+kokoro          = ["kokoro>=0.9.4"]
+piper           = ["piper-tts>=1.2.0"]
+edge-tts        = ["edge-tts>=6.1.0"]
 all             = [
     "anthropic>=0.40.0",
     "openai>=1.40.0",
@@ -47,6 +59,11 @@ all             = [
     "google-cloud-speech>=2.26.0",
     "google-cloud-language>=2.13.0",
     "requests>=2.31.0",
+    "pyttsx3>=2.90",
+    "faster-whisper>=1.0.0",
+    "kokoro>=0.9.4",
+    "piper-tts>=1.2.0",
+    "edge-tts>=6.1.0",
 ]
 dev = [
     "pytest>=8.0",

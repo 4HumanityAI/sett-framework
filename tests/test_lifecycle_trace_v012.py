@@ -427,8 +427,8 @@ class BrokenRecorder:
     prevent an execution from stopping.
 
     ``fail_lookup`` switches between the two distinct failure points a
-    recorder has from this module's perspective - resolving the causal
-    parent, and writing the event itself - because a try block that only
+    recorder has from this module's perspective, including resolving the causal
+    parent and writing the event itself, because a try block that only
     covers one of them would leak the other.
     """
 

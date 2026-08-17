@@ -144,7 +144,7 @@ class TestGoogleSentimentAdapterAnalyze:
         This used to assert that an unset GOOGLE_APPLICATION_CREDENTIALS
         was itself the error. That encoded a defect: Application Default
         Credentials resolve from five sources and the environment variable
-        is one, so the check refused four valid setups - including GKE
+        is one, so the check refused four valid setups, including GKE
         workload identity, where the only way to satisfy it was the
         service account key file Google recommends avoiding.
         """
@@ -185,7 +185,7 @@ class TestGoogleSentimentAdapterAnalyze:
         """F18 regression (defensive audit #2).
 
         credentials_path used to be applied by mutating the process-wide
-        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] - global state that
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"], global state that
         a second adapter instance configured with a different path would
         silently overwrite for the first. It is now loaded into an
         explicit Credentials object and passed directly to the client

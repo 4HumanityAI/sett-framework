@@ -116,7 +116,7 @@ class SkipCause:
         domain: The domain of the stage that failed, was rejected, or was
             cancelled.
         run_id: That stage's execution node, when tracing identity was
-            available - the same identifier its trace events carry.
+            available, using the same identifier its trace events carry.
         reason_code: Why that stage stopped (e.g. "policy.reject").
     """
     domain: str
@@ -151,7 +151,7 @@ class StageOutcome:
     execution_status: ExecutionStatus | None = None
     """The structured counterpart of ``status``, when this stage ran.
 
-    ``None`` means this stage never executed - which is why there is no
+    ``None`` means this stage never executed, which is why there is no
     ``ExecutionStatus.SKIPPED``: a stage that never ran has no execution
     outcome to report, and giving it ``CANCELLED`` would claim somebody
     stopped it. The invariant is exactly:

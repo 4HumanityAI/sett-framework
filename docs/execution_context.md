@@ -1,13 +1,20 @@
-# SETT v0.11.0: ExecutionContext and end-to-end trace design
+# ExecutionContext and end-to-end trace design
 
-Status: implemented release contract  
-Target: SETT Framework v0.11.0  
-Baseline: SETT v0.10.1  
+Status: current design with preserved historical rationale  
+Introduced: SETT Framework v0.11.0  
+Last reviewed: SETT Framework v0.13.0  
+Original baseline: SETT Framework v0.10.1  
 Scope: framework-generic execution identity, causal trace propagation, safe trace export, and backward compatibility
 
-## 1. Decision summary
+This is the canonical, living design document for execution context and
+tracing. Future releases update this file in place. Version-specific passages
+record the constraints and release gates that shaped the original design; they
+are historical rationale, not competing contracts. Current public APIs and
+later extensions are documented in `api_reference.md` and `CHANGELOG.md`.
 
-SETT v0.11.0 will introduce:
+## 1. Original v0.11 decision summary
+
+SETT v0.11.0 introduced:
 
 1. An immutable, derivable `ExecutionContext`.
 2. A per-orchestrator `TraceRecorder` containing structured, causally linked `TraceEvent` records.
@@ -16,9 +23,9 @@ SETT v0.11.0 will introduce:
 5. Sanitized trace views and exporter hooks that never inspect or export `PrivateMemory` values.
 6. A compatibility path in which existing `process(input_data)` and `resolve(context)` implementations continue to work unchanged.
 
-This release will not add conversation persistence, a consumer-specific session model, cancellation, deadlines, idempotency, generic persistence, or `PolicyDecision`. Those remain assigned to later roadmap releases.
+The original v0.11.0 scope did not add conversation persistence, a consumer-specific session model, cancellation, deadlines, idempotency, generic persistence, or `PolicyDecision`. Those remained assigned to later roadmap releases.
 
-## 2. Why this shape fits the current code
+## 2. Why this shape fit the original code
 
 The v0.10.1 public extension contract requires applications to override:
 
@@ -38,7 +45,7 @@ The ambient value is not application state and is never a global singleton conte
 
 ### 3.1 ExecutionContext
 
-Proposed public module: `sett.core_ruler.execution_context`
+Public module: `sett.core_ruler.execution_context`
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -92,7 +99,7 @@ These limits prevent a trace context from becoming a hidden memory or payload ch
 
 ### 3.2 TraceEvent
 
-Proposed public module: `sett.audit_ruler.trace`
+Public module: `sett.audit_ruler.trace`
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -401,7 +408,7 @@ New parameters are keyword-only where possible. Existing positional parameter me
 
 Consumer-specific identifiers are accepted only as opaque optional fields. SETT does not create, persist, expire, or interpret sessions.
 
-## 10. Implementation slices
+## 10. Original implementation slices
 
 ### Slice A: context primitives
 
@@ -443,7 +450,7 @@ Consumer-specific identifiers are accepted only as opaque optional fields. SETT 
 - Add a v0.11 migration guide showing unchanged legacy code and opt-in traced code.
 - Integrate the reference consumer only after the SETT contract suite passes.
 
-## 11. Required tests for the release gate
+## 11. Original v0.11 release-gate tests
 
 ### Identity and isolation
 
@@ -484,7 +491,7 @@ Consumer-specific identifiers are accepted only as opaque optional fields. SETT 
 - Missing, reordered, or cross-trace causal references are detected.
 - Effect execution is blocked when the recorder cannot commit its pre-effect event.
 
-## 12. Gate interpretation
+## 12. Original gate interpretation
 
 v0.11.0 is complete when, from one `trace_id`, a caller can safely reconstruct:
 
@@ -499,7 +506,7 @@ v0.11.0 is complete when, from one `trace_id`, a caller can safely reconstruct:
 
 The gate is not met by merely adding IDs to existing independent logs. The same context and causal event references must propagate end to end, and two executions must never share a context accidentally.
 
-## 13. Deferred decisions
+## 13. Decisions deferred at introduction
 
 The following are deliberately deferred:
 

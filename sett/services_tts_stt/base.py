@@ -17,8 +17,17 @@ STTBase adapter; nothing about the interface forces it to pretend
 otherwise).
 """
 from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from typing import Any
+
+from sett.core_ruler.adapter import (
+    AdapterCapabilities,
+    AdapterHealth,
+    AdapterKind,
+    adapter_health,
+    record_adapter_event,
+)
 
 
 class TTSBase(ABC):
@@ -55,6 +64,28 @@ class TTSBase(ABC):
     ``sett.core_ruler.lifecycle``; see ``LLMBase`` for a worked example.
     """
 
+    @property
+    def capabilities(self) -> AdapterCapabilities:
+        """Declared behavior; legacy adapters honestly default to UNKNOWN."""
+        return AdapterCapabilities(AdapterKind.TTS)
+
+    @property
+    def health(self) -> AdapterHealth:
+        """Most recent passive observation, initially UNKNOWN."""
+        return adapter_health(self)
+
+    def check_health(self) -> AdapterHealth:
+        """Return current health without hidden or billable provider I/O."""
+        health = self.health
+        record_adapter_event(
+            self,
+            kind="adapter.health_checked",
+            operation="check_health",
+            status=health.status.value,
+            reason_codes=health.reason_codes,
+        )
+        return health
+
     @abstractmethod
     def synthesize(self, text: str, **kwargs: Any) -> bytes:
         """
@@ -68,13 +99,11 @@ class TTSBase(ABC):
         Returns:
             Raw audio bytes, encoded as `audio_format`.
         """
-        pass
 
     @property
     @abstractmethod
     def audio_format(self) -> str:
         """Return the audio encoding this adapter produces (e.g. 'mp3', 'wav')."""
-        pass
 
 
 class STTBase(ABC):
@@ -122,4 +151,25 @@ class STTBase(ABC):
             for actual failures (network, auth, malformed audio), not
             for silence or unrecognized speech.
         """
-        pass
+
+    @property
+    def capabilities(self) -> AdapterCapabilities:
+        """Declared behavior; legacy adapters honestly default to UNKNOWN."""
+        return AdapterCapabilities(AdapterKind.STT)
+
+    @property
+    def health(self) -> AdapterHealth:
+        """Most recent passive observation, initially UNKNOWN."""
+        return adapter_health(self)
+
+    def check_health(self) -> AdapterHealth:
+        """Return current health without hidden or billable provider I/O."""
+        health = self.health
+        record_adapter_event(
+            self,
+            kind="adapter.health_checked",
+            operation="check_health",
+            status=health.status.value,
+            reason_codes=health.reason_codes,
+        )
+        return health

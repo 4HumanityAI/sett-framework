@@ -6,7 +6,7 @@ Two jobs.
 The first is section 24.8: proving that a caller who never asked for any
 of this sees exactly what v0.11.0 gave them, down to the exception type.
 That is the promise the whole version rests on, and "the old tests still
-pass" is necessary but not sufficient - the old tests were written before
+pass" is necessary but not sufficient; the old tests were written before
 there was anything to collide with.
 
 The second is deliberately hostile. Every test below the compatibility
@@ -608,7 +608,7 @@ def test_no_terminal_kind_is_declared_without_ever_being_emitted():
     This guard exists because the audit found one: ``broadcast.cancelled``
     and ``broadcast.timed_out`` were added to the terminal table in phase 3
     and never emitted, so a cancelled broadcast was still being closed with
-    ``broadcast.failed`` - reporting the exact difference this version was
+    ``broadcast.failed``, reporting the exact difference this version was
     built to make as if it did not exist. Adding a kind to the table and
     forgetting to emit it now fails here instead of in an incident.
     """
@@ -621,7 +621,7 @@ def test_no_terminal_kind_is_declared_without_ever_being_emitted():
     # is what made the first version of this guard vacuous: every declared
     # kind trivially appeared in the source, because the declaration is
     # itself a string literal. What has to be searched is the emitting
-    # code, and trace.py never emits a kind - it receives one.
+    # code, and trace.py never emits a kind; it receives one.
     declaring_module = package_root / "audit_ruler" / "trace.py"
     source = "\n".join(
         path.read_text(encoding="utf-8")
@@ -723,7 +723,7 @@ def test_cancelling_one_concurrent_run_does_not_touch_the_others():
 # ── Process-level signals must propagate, not become a result ──────────────
 #
 # D-01 / F04 regression (both audits): KeyboardInterrupt, SystemExit and
-# GeneratorExit are not "the run failed" - they mean the process itself is
+# GeneratorExit are not "the run failed"; they mean the process itself is
 # being interrupted or torn down. Before this fix, the broad
 # `except BaseException` blocks that turn a stopped or failed controlled
 # run into a structured ExecutionResult caught these too, so a Ctrl+C
@@ -802,8 +802,8 @@ def test_a_controlled_run_still_releases_its_control_after_an_interrupt():
 # ---------------------------------------------------------------------------
 # Duplicate registration and identifier validation (F05/F06/F07/F08/F21,
 # defensive audit #2): a second registration under a name/action_type that
-# already has one used to silently overwrite it - across handlers, experts,
-# and context analyzers - with no signal that anything was lost. The one
+# already has one used to silently overwrite it across handlers, experts,
+# and context analyzers, with no signal that anything was lost. The one
 # documented, tested exception is SETTOrchestrator.register_agent()'s
 # domain-keyed StubDomainAgent swap (see docs/api_reference.md and
 # tests/test_stub_agent.py), which is deliberately left untouched here.

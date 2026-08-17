@@ -142,7 +142,7 @@ class SETTOrchestrator:
 
         Registering an agent for a domain that already has one REPLACES
         it. That is deliberate and is how a ``StubDomainAgent`` is swapped
-        for the real implementation once it exists - "replacing a stub
+        for the real implementation once it exists, since "replacing a stub
         with the real piece is transparent (same domain, zero changes to
         the rest)", which the fail-honest scaffolding convention promises
         and the stub tests exercise. Unlike ``register_expert()`` and
@@ -409,9 +409,9 @@ class SETTOrchestrator:
         """Invoke one agent, closing its trace boundary whatever happens.
 
         Entering the control is inside this try on purpose. A control whose
-        entry checkpoint fails - which is what happens when cancellation
+        entry checkpoint fails, which is what happens when cancellation
         arrives in the window between ``agent.started`` being recorded and
-        the agent actually starting - raises before the body ever runs, and
+        the agent actually starting, raises before the body ever runs, and
         an ``agent.started`` with no terminal is exactly the unclosed
         boundary the recorder's verification rejects.
         """
@@ -566,7 +566,7 @@ class SETTOrchestrator:
     def control_registry(self) -> ExecutionControlRegistry:
         """The registry holding this orchestrator's live execution controls.
 
-        Cancellation is addressed by ``run_id`` - the same identifier that
+        Cancellation is addressed by ``run_id``, the same identifier that
         appears in exported trace events. An application that keeps the
         ``run_id`` of a conversational turn can later cancel exactly that
         turn, without touching the session it belongs to or the sibling
@@ -595,7 +595,7 @@ class SETTOrchestrator:
         registry, so the request is recorded and its event id travels down
         to every node it stops. Without that the work would halt just the
         same, but the trace would show things stopping with nothing saying
-        who asked - which is the question a trace exists to answer.
+        who asked, which is the question a trace exists to answer.
         """
         control = self._control_registry.control_for(run_id)
         if control is not None:
@@ -661,7 +661,7 @@ class SETTOrchestrator:
         deadline, an ethical rejection and a technical failure all come
         back as an ``ExecutionResult`` whose status distinguishes them, and
         whose ``exception`` still holds the real error for anyone who wants
-        it - ``unwrap()`` re-raises it unchanged.
+        it; ``unwrap()`` re-raises it unchanged.
 
         To be able to cancel this run, pass an ``execution_context`` you
         built yourself and hand its ``run_id`` to whoever might need to
@@ -1345,7 +1345,7 @@ class SETTOrchestrator:
 
         Partial work is reported as partial. If two stages of four
         completed and the third was cancelled, the result is ``PARTIAL``
-        with ``completed_units=2`` - not ``CANCELLED``, which would throw
+        with ``completed_units=2``, not ``CANCELLED``, which would throw
         away the two that really did finish, and not ``SUCCESS``, which
         would hide the two that did not. ``result.value`` still carries the
         full ``PipelineResult``, so the completed stages' outputs remain
@@ -1738,7 +1738,7 @@ class SETTOrchestrator:
             # A stage that raises unwinds through this handler instead of
             # through the normal PARTIAL path below, but the stages before
             # it completed just as really as they would have under a
-            # cancellation - the outcome of a genuine failure is not
+            # cancellation, since the outcome of a genuine failure is not
             # informative enough to justify discarding them. Same shape as
             # the PipelineResult built below, so a caller does not need to
             # know which of the two paths produced it.

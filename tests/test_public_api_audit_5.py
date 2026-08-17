@@ -16,7 +16,7 @@ API-03  Transitioning an unknown identity is a silent no-op in the
 The provider doubles follow ``test_llm_cloud_adapters_v012.py``: none of
 ``openai``, ``anthropic`` or ``google-generativeai`` is installed here, so
 each is stood up as a module in ``sys.modules``. What that proves is what
-SETT controls - the translation at the boundary - not that the real SDK
+SETT controls, namely the translation at the boundary, not that the real SDK
 raises exactly this way.
 """
 from __future__ import annotations
@@ -212,7 +212,7 @@ def test_adapter_refuses_an_unusable_timeout(
     """
     NaN is the one that matters: it compares False against every bound, so
     an adapter holding one has a timeout that is never reached. Zero is
-    refused for the reason ``validate_duration_seconds`` documents - the
+    refused for the reason ``validate_duration_seconds`` documents, since the
     honest spelling of "already expired" is not a duration.
     """
     with pytest.raises(SETTValidationError):
@@ -333,7 +333,7 @@ def _public_definitions_without_docstring() -> list[str]:
     Private classes (a leading underscore on the class itself) are out of
     scope: they are implementation, and their own class docstring is where
     the explanation belongs. Dunder methods other than ``__init__`` are
-    out too - ``__repr__`` means what Python says it means.
+    out too; ``__repr__`` means what Python says it means.
     """
     import ast
     import pathlib
@@ -426,7 +426,7 @@ def test_public_init_methods_declare_their_return_type():
 def test_every_exported_symbol_appears_in_the_api_reference():
     """
     Public API audit #5 found twelve names in ``sett.__all__`` with zero
-    mentions in ``docs/api_reference.md`` - not thin coverage, none at
+    mentions in ``docs/api_reference.md``, rather than thin coverage or none at
     all. Exporting a name is a promise to support it; a reader who cannot
     find out what it does has been given a promise about nothing.
 

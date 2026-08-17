@@ -178,7 +178,7 @@ class TestPhrasingExpertWithAgent:
         assert result["time_of_day"] == "morning"
 
     def test_verify_facts_default_is_a_pass_through(self):
-        """Without an override, verify_facts() changes nothing - v0.10.0's
+        """Without an override, verify_facts() changes nothing, preserving v0.10.0's
         default must be indistinguishable from pre-v0.10.0 behavior."""
         expert = GreetingLikeExpert(name="greeting", llm=FakeLLM())
         result = expert.resolve({"hour": 8})
@@ -218,11 +218,11 @@ class TestPhrasingExpertWithAgent:
 # ── verify_facts() (v0.10.0): the 4th, optional hook ─────────────────────
 # Motivated by two independent subclasses in a downstream project that
 # needed exactly this and ended up overriding resolve() wholesale to
-# get it - see the class docstring.
+# get it; see the class docstring.
 
 class StrictGreetingExpert(PhrasingExpert):
     """Same as GreetingLikeExpert, but rejects any phrasing that
-    contradicts the real time_of_day - the same shape independently
+    contradicts the real time_of_day, the same shape independently
     needed by the two subclasses that motivated this hook (see the
     class docstring)."""
 
@@ -271,7 +271,7 @@ class TestPhrasingExpertVerifyFacts:
 
     def test_verify_facts_also_runs_on_fallback_text_not_only_llm_output(self):
         """verify_facts() always runs after _phrase(), even with no LLM
-        configured - fallback_text() is already correct by construction
+        configured, since fallback_text() is already correct by construction
         here, so it should pass through unchanged."""
         expert = StrictGreetingExpert(name="greeting")   # no LLM
         result = expert.resolve({"hour": 8})
@@ -280,7 +280,7 @@ class TestPhrasingExpertVerifyFacts:
     def test_overriding_verify_facts_does_not_trigger_the_resolve_override_warning(self):
         """The whole point of the hook: you don't need to touch resolve()
         to get this, so the "overrides resolve()" warning should not
-        fire - unlike an older subclass that does override resolve()
+        fire, unlike an older subclass that does override resolve()
         directly."""
         import logging
 

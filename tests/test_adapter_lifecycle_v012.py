@@ -1,7 +1,7 @@
 """
 Phase 6 of v0.12.0: the two reserved adapter kwargs.
 
-Adapters are outside the Agent/Expert tree on purpose - no memory, no
+Adapters are outside the Agent/Expert tree on purpose: no memory, no
 orchestrator registration, no ambient control handed to them the way a
 component gets one. ``timeout`` and ``cancellation_token`` are how the
 framework's lifecycle reaches them anyway, and standardizing the spelling
@@ -12,7 +12,7 @@ A caveat these tests state rather than hide: an adapter built on a
 provider SDK is exercised here against a stub, and a stub accepts any
 keyword argument. That proves this framework passes the timeout down; it
 does not prove the real SDK accepts it. The two adapters that talk plain
-HTTP - Ollama and ElevenLabs - are the ones where the whole path is
+HTTP, specifically Ollama and ElevenLabs, are the ones where the whole path is
 verifiable here, and they are tested as such.
 """
 from __future__ import annotations
@@ -158,7 +158,7 @@ def test_lifecycle_kwargs_applies_the_named_adapter_timeout(registry):
     """H-02 regression: an Expert naming its adapter gets the policy value.
 
     Before this fix, ``LifecyclePolicy.adapter_timeout()`` was resolvable
-    but had no path to reach an adapter call at all - there was no ambient
+    but had no path to reach an adapter call at all; there was no ambient
     policy and ``lifecycle_kwargs()`` took no adapter identity.
     """
     with _control(registry, timeout_seconds=30.0) as control:

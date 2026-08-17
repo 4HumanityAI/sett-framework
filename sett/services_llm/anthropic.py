@@ -10,15 +10,30 @@ without changing the rest of the framework.
 Requires: pip install sett-framework[anthropic]
 """
 from __future__ import annotations
+
 import os
 from typing import Any
 
+from sett.core_ruler.adapter import (
+    AdapterCapabilities,
+    AdapterErrorKind,
+    AdapterKind,
+    CapabilitySupport,
+    ConnectivityRequirement,
+    adapter_call_scope,
+    normalized_adapter_error,
+)
 from sett.core_ruler.lifecycle import (
     pop_lifecycle_kwargs,
     validate_duration_seconds,
 )
+from sett.exceptions import (
+    SETTAdapterError,
+    SETTCancelledError,
+    SETTLLMAdapterError,
+    SETTTimeoutError,
+)
 from sett.services_llm.base import LLMBase
-from sett.exceptions import SETTLLMAdapterError, bound_provider_error_message
 
 
 class AnthropicAdapter(LLMBase):
@@ -64,14 +79,22 @@ class AnthropicAdapter(LLMBase):
         except ImportError:
             raise SETTLLMAdapterError(
                 "The 'anthropic' package is required to use the AnthropicAdapter. "
-                "Install it with: pip install sett-framework[anthropic]"
+                "Install it with: pip install sett-framework[anthropic]",
+                kind=AdapterErrorKind.CONFIGURATION,
+                provider="anthropic",
+                adapter_name=type(self).__name__,
+                reason_code="adapter.dependency_missing",
             )
 
         self._api_key = (api_key or os.getenv("ANTHROPIC_API_KEY", "")).strip()
         if not self._api_key:
             raise SETTLLMAdapterError(
                 "Anthropic API key not found. "
-                "Pass api_key= or set the ANTHROPIC_API_KEY environment variable."
+                "Pass api_key= or set the ANTHROPIC_API_KEY environment variable.",
+                kind=AdapterErrorKind.CONFIGURATION,
+                provider="anthropic",
+                adapter_name=type(self).__name__,
+                reason_code="adapter.credentials_missing",
             )
 
         self._model = model
@@ -86,10 +109,17 @@ class AnthropicAdapter(LLMBase):
         # library's exception hierarchy to catch it.
         try:
             self._client = self._anthropic.Anthropic(api_key=self._api_key)
+        except (SETTCancelledError, SETTTimeoutError, SETTAdapterError):
+            raise
         except Exception as error:
-            raise SETTLLMAdapterError(
-                f"The 'anthropic' client could not be constructed: "
-                f"{type(error).__name__}: {error}"
+            raise normalized_adapter_error(
+                error,
+                error_type=SETTLLMAdapterError,
+                provider="anthropic",
+                adapter_name=type(self).__name__,
+                operation="construct",
+                kind=AdapterErrorKind.CONFIGURATION,
+                reason_code="adapter.client_construction_failed",
             ) from error
 
     @property
@@ -97,26 +127,49 @@ class AnthropicAdapter(LLMBase):
         """The Claude model this adapter calls."""
         return self._model
 
+    @property
+    def capabilities(self) -> AdapterCapabilities:
+        """Capabilities implemented by this synchronous adapter."""
+        return AdapterCapabilities(
+            AdapterKind.LLM,
+            streaming=CapabilitySupport.NO,
+            voice_cloning=CapabilitySupport.NO,
+            partial_results=CapabilitySupport.NO,
+            connectivity=ConnectivityRequirement.REMOTE_SERVICE,
+            input_formats=("text",),
+            output_formats=("text",),
+            metadata={"operations": ("complete", "chat")},
+        )
+
     def complete(self, prompt: str, system: str = "", **kwargs: Any) -> str:
         """One-shot completion: no conversation history."""
-        lifecycle = pop_lifecycle_kwargs(kwargs)
-        lifecycle.throw_if_cancelled()
-        try:
-            resp = self._client.messages.create(
-                model=self._model,
-                max_tokens=kwargs.get("max_tokens", self._max_tokens),
-                system=system or "You are a helpful assistant.",
-                temperature=kwargs.get("temperature", self._temperature),
-                messages=[{"role": "user", "content": prompt}],
-                timeout=lifecycle.effective_timeout(self._timeout_seconds),
-            )
-        except Exception as e:
-            raise SETTLLMAdapterError(
-                f"Anthropic API error during complete(): "
-                f"{bound_provider_error_message(e)}"
-            ) from e
-        lifecycle.throw_if_cancelled()
-        return resp.content[0].text if resp.content else ""
+        with adapter_call_scope(self, "complete"):
+            lifecycle = pop_lifecycle_kwargs(kwargs)
+            lifecycle.throw_if_cancelled()
+            response_received = False
+            try:
+                resp = self._client.messages.create(
+                    model=self._model,
+                    max_tokens=kwargs.get("max_tokens", self._max_tokens),
+                    system=system or "You are a helpful assistant.",
+                    temperature=kwargs.get("temperature", self._temperature),
+                    messages=[{"role": "user", "content": prompt}],
+                    timeout=lifecycle.effective_timeout(self._timeout_seconds),
+                )
+                response_received = True
+                lifecycle.throw_if_cancelled()
+                return resp.content[0].text if resp.content else ""
+            except (SETTCancelledError, SETTTimeoutError, SETTAdapterError):
+                raise
+            except Exception as error:
+                raise normalized_adapter_error(
+                    error,
+                    error_type=SETTLLMAdapterError,
+                    provider="anthropic",
+                    adapter_name=type(self).__name__,
+                    operation="complete",
+                    kind=(AdapterErrorKind.INVALID_RESPONSE if response_received else None),
+                ) from error
 
     def chat(
         self,
@@ -125,24 +178,33 @@ class AnthropicAdapter(LLMBase):
         **kwargs: Any,
     ) -> str:
         """Multi-turn conversation completion."""
-        lifecycle = pop_lifecycle_kwargs(kwargs)
-        lifecycle.throw_if_cancelled()
-        try:
-            resp = self._client.messages.create(
-                model=self._model,
-                max_tokens=kwargs.get("max_tokens", self._max_tokens),
-                system=system or "You are a helpful assistant.",
-                temperature=kwargs.get("temperature", self._temperature),
-                messages=messages,
-                timeout=lifecycle.effective_timeout(self._timeout_seconds),
-            )
-        except Exception as e:
-            raise SETTLLMAdapterError(
-                f"Anthropic API error during chat(): "
-                f"{bound_provider_error_message(e)}"
-            ) from e
-        lifecycle.throw_if_cancelled()
-        return resp.content[0].text if resp.content else ""
+        with adapter_call_scope(self, "chat"):
+            lifecycle = pop_lifecycle_kwargs(kwargs)
+            lifecycle.throw_if_cancelled()
+            response_received = False
+            try:
+                resp = self._client.messages.create(
+                    model=self._model,
+                    max_tokens=kwargs.get("max_tokens", self._max_tokens),
+                    system=system or "You are a helpful assistant.",
+                    temperature=kwargs.get("temperature", self._temperature),
+                    messages=messages,
+                    timeout=lifecycle.effective_timeout(self._timeout_seconds),
+                )
+                response_received = True
+                lifecycle.throw_if_cancelled()
+                return resp.content[0].text if resp.content else ""
+            except (SETTCancelledError, SETTTimeoutError, SETTAdapterError):
+                raise
+            except Exception as error:
+                raise normalized_adapter_error(
+                    error,
+                    error_type=SETTLLMAdapterError,
+                    provider="anthropic",
+                    adapter_name=type(self).__name__,
+                    operation="chat",
+                    kind=(AdapterErrorKind.INVALID_RESPONSE if response_received else None),
+                ) from error
 
     def __repr__(self) -> str:
         return f"AnthropicAdapter(model={self._model!r})"

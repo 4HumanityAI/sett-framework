@@ -8,7 +8,7 @@ after itself".
 The single most important design decision here is what this module does
 NOT contain: a second execution tree.
 
-``ExecutionContext`` has been a tree since v0.11.0 - ``derive()`` keeps
+``ExecutionContext`` has been a tree since v0.11.0: ``derive()`` keeps
 ``trace_id``, sets ``parent_id`` to the current ``run_id`` and mints a new
 ``run_id``, which is exactly what Orchestrator -> Agent -> Expert ->
 PipelineStage -> Handler already do at every instrumented boundary. So an
@@ -109,18 +109,18 @@ class _ControlNode:
     """
 
     __slots__ = (
+        "callbacks",
+        "cancelled_run_id",
+        "cause_event_id",
         "context",
         "control",
         "event",
         "reason",
-        "cause_event_id",
-        "cancelled_run_id",
-        "callbacks",
         "released",
     )
 
     def __init__(
-        self, context: ExecutionContext, control: "ExecutionControl"
+        self, context: ExecutionContext, control: ExecutionControl
     ) -> None:
         self.context = context
         self.control = control
@@ -182,7 +182,7 @@ class ExecutionControlRegistry:
 
     # ── registration ─────────────────────────────────────────────────────
 
-    def register(self, control: "ExecutionControl") -> None:
+    def register(self, control: ExecutionControl) -> None:
         """Register a control, inheriting any ancestor's cancellation.
 
         Raises:
@@ -190,8 +190,8 @@ class ExecutionControlRegistry:
                 registered, or still retained because its subtree has not
                 finished evicting yet. Two live controls for one execution
                 node would mean two answers to "is this cancelled", which
-                is exactly the ambiguity this module exists to avoid - and
-                a released-but-retained node (see ``_evict_if_possible``)
+                is exactly the ambiguity this module exists to avoid. A
+                released-but-retained node (see ``_evict_if_possible``)
                 is still that same node as far as any of its still-live
                 children are concerned: overwriting it here would let a
                 child's later eviction walk up into a control that never
@@ -275,7 +275,7 @@ class ExecutionControlRegistry:
                 return CancellationSnapshot(cancelled=False)
             return node.snapshot()
 
-    def control_for(self, run_id: str) -> "ExecutionControl | None":
+    def control_for(self, run_id: str) -> ExecutionControl | None:
         """The live control for ``run_id``, when there is one.
 
         Exists so a caller holding only a ``run_id`` can cancel *through
@@ -331,7 +331,7 @@ class ExecutionControlRegistry:
         """Cancel one node and every registered descendant of it.
 
         Idempotent: cancelling an already-cancelled node returns False and
-        changes nothing, including the original reason - the first cause
+        changes nothing, including the original reason, since the first cause
         of a cancellation is the true one and is never overwritten by a
         later duplicate request.
 
@@ -486,7 +486,7 @@ class CancellationToken:
         implement a cancellable sleep.
 
         Returns:
-            False on a plain timeout - the wait finished and nothing was
+            False on a plain timeout, when the wait finished and nothing was
             cancelled.
 
         Raises:
@@ -562,7 +562,7 @@ def validate_duration_seconds(
     One function because there were five copies of this rule -
     ``Deadline.after``, ``LifecyclePolicy``'s two tables,
     ``RetryPolicy``, ``ExecutionState.duration_seconds`` and the reserved
-    adapter ``timeout`` kwarg - and the fifth was written by copying the
+    adapter ``timeout`` kwarg, and the fifth was written by copying the
     fourth, which is how the adapter kwarg ended up the one place that
     still accepted ``NaN``. Five copies of a rule is five chances for one
     of them to be the exception nobody notices.
@@ -616,14 +616,17 @@ class Deadline:
     """
 
     expires_at_monotonic: float | None = None
+    _maximum_duration_seconds: float | None = field(
+        default=None, repr=False, compare=False
+    )
 
     @classmethod
-    def after(cls, seconds: float | None) -> "Deadline":
+    def after(cls, seconds: float | None) -> Deadline:
         """Build a deadline ``seconds`` from now; ``None`` means unbounded."""
         if seconds is None:
             return cls()
         seconds = validate_duration_seconds(seconds, name="Timeout")
-        return cls(time.monotonic() + seconds)
+        return cls(time.monotonic() + seconds, seconds)
 
     @property
     def is_unbounded(self) -> bool:
@@ -642,9 +645,12 @@ class Deadline:
         """Seconds left, never negative; ``None`` when unbounded."""
         if self.expires_at_monotonic is None:
             return None
-        return max(0.0, self.expires_at_monotonic - time.monotonic())
+        remaining = max(0.0, self.expires_at_monotonic - time.monotonic())
+        if self._maximum_duration_seconds is not None:
+            remaining = min(remaining, self._maximum_duration_seconds)
+        return remaining
 
-    def child(self, timeout_seconds: float | None) -> "Deadline":
+    def child(self, timeout_seconds: float | None) -> Deadline:
         """The tighter of this deadline and a local timeout.
 
         A nested unit can shorten the time it is given and never extend
@@ -655,8 +661,12 @@ class Deadline:
             return local
         if local.expires_at_monotonic is None:
             return self
+        parent_remaining = self.remaining()
+        local_remaining = local.remaining()
+        assert parent_remaining is not None and local_remaining is not None
         return Deadline(
-            min(self.expires_at_monotonic, local.expires_at_monotonic)
+            min(self.expires_at_monotonic, local.expires_at_monotonic),
+            min(parent_remaining, local_remaining),
         )
 
     def throw_if_expired(self, run_id: str | None = None) -> None:
@@ -772,19 +782,19 @@ class ExecutionControl:
     """
 
     __slots__ = (
+        "_cleanup_errors",
+        "_deadline_recorded",
+        "_finished_at",
+        "_finished_at_monotonic",
+        "_phase",
+        "_registry",
+        "_started_at",
+        "_started_at_monotonic",
+        "_terminal_error",
+        "_trace_recorder",
+        "cleanup_hooks",
         "context",
         "deadline",
-        "cleanup_hooks",
-        "_registry",
-        "_phase",
-        "_terminal_error",
-        "_cleanup_errors",
-        "_started_at",
-        "_finished_at",
-        "_started_at_monotonic",
-        "_finished_at_monotonic",
-        "_trace_recorder",
-        "_deadline_recorded",
     )
 
     def __init__(
@@ -793,7 +803,7 @@ class ExecutionControl:
         *,
         deadline: Deadline | None = None,
         registry: ExecutionControlRegistry | None = None,
-        trace_recorder: "TraceRecorder | None" = None,
+        trace_recorder: TraceRecorder | None = None,
     ) -> None:
         """Build a control over ``context``; enter it to make it live."""
         if not isinstance(context, ExecutionContext):
@@ -811,10 +821,10 @@ class ExecutionControl:
         self._finished_at: datetime | None = None
         self._started_at_monotonic: float | None = None
         self._finished_at_monotonic: float | None = None
-        self._trace_recorder: "TraceRecorder | None" = trace_recorder
+        self._trace_recorder: TraceRecorder | None = trace_recorder
         self._deadline_recorded = False
 
-    def attach_trace_recorder(self, recorder: "TraceRecorder") -> None:
+    def attach_trace_recorder(self, recorder: TraceRecorder) -> None:
         """Record this control's lifecycle events on an existing recorder.
 
         Entirely optional: without a recorder, cancellation and cleanup
@@ -822,7 +832,7 @@ class ExecutionControl:
 
         Contract: the recorder must already be recording on this control's
         own context, which is what every instrumented boundary in SETT
-        does - the orchestrator derives a context, records its
+        does: the orchestrator derives a context, records its
         ``*.started`` event on it, and builds the control on that same
         context. Attaching a recorder to a control whose context has never
         appeared in the trace would emit an event whose parent run is
@@ -884,8 +894,8 @@ class ExecutionControl:
         *,
         timeout_seconds: float | None = None,
         registry: ExecutionControlRegistry | None = None,
-        trace_recorder: "TraceRecorder | None" = None,
-    ) -> "ExecutionControl":
+        trace_recorder: TraceRecorder | None = None,
+    ) -> ExecutionControl:
         """Start a control tree at ``context``."""
         return cls(
             context,
@@ -899,7 +909,7 @@ class ExecutionControl:
         *,
         context: ExecutionContext | None = None,
         timeout_seconds: float | None = None,
-    ) -> "ExecutionControl":
+    ) -> ExecutionControl:
         """Derive a control for nested work.
 
         ``context`` should be the context the caller already derived for
@@ -928,6 +938,16 @@ class ExecutionControl:
     def run_id(self) -> str:
         """This control's own execution node."""
         return self.context.run_id
+
+    @property
+    def trace_recorder(self) -> TraceRecorder | None:
+        """The optional recorder shared by this control tree.
+
+        Exposed read-only so cross-cutting boundaries such as adapters can
+        append sanitized events to the same causal trace without inventing a
+        second recorder or reaching into private state.
+        """
+        return self._trace_recorder
 
     @property
     def parent_id(self) -> str | None:
@@ -991,7 +1011,7 @@ class ExecutionControl:
             return None
         end = self._finished_at_monotonic
         if end is None:
-            end = time.monotonic()
+            end = time.perf_counter()
         return end - self._started_at_monotonic
 
     def cancel(
@@ -1007,7 +1027,7 @@ class ExecutionControl:
         makes every cancelled terminal further down causally explained:
         the error raised in a leaf points back, through
         ``cause_event_id``, at the exact event where somebody asked for
-        this to stop - not merely at the fact that it stopped.
+        this to stop, not merely at the fact that it stopped.
         """
         recorded_cause = cause_event_id
         if not self.is_cancelled:
@@ -1110,7 +1130,7 @@ class ExecutionControl:
 
     # ── context manager ──────────────────────────────────────────────────
 
-    def __enter__(self) -> "ExecutionControl":
+    def __enter__(self) -> ExecutionControl:  # noqa: PYI034 - Python 3.10 support
         """Register, then verify this node may start at all.
 
         Python does not call ``__exit__()`` when ``__enter__()`` raises, so
@@ -1126,7 +1146,7 @@ class ExecutionControl:
             )
         self._phase = ControlPhase.RUNNING
         self._started_at = datetime.now(timezone.utc)
-        self._started_at_monotonic = time.monotonic()
+        self._started_at_monotonic = time.perf_counter()
         try:
             self._registry.register(self)
             self.checkpoint()
@@ -1146,7 +1166,7 @@ class ExecutionControl:
         self._phase = ControlPhase.FINISHED
         self._terminal_error = error
         self._finished_at = datetime.now(timezone.utc)
-        self._finished_at_monotonic = time.monotonic()
+        self._finished_at_monotonic = time.perf_counter()
         try:
             self.run_cleanup()
         finally:
@@ -1243,12 +1263,12 @@ def remaining_seconds() -> float | None:
     return control.remaining_seconds()
 
 
-_ACTIVE_LIFECYCLE_POLICY: ContextVar["LifecyclePolicy | None"] = ContextVar(
+_ACTIVE_LIFECYCLE_POLICY: ContextVar[LifecyclePolicy | None] = ContextVar(
     "sett_lifecycle_policy", default=None
 )
 
 
-def current_lifecycle_policy() -> "LifecyclePolicy | None":
+def current_lifecycle_policy() -> LifecyclePolicy | None:
     """The ``LifecyclePolicy`` active in this thread/task, if any.
 
     ``None`` when nobody established one, which keeps every policy lookup
@@ -1261,8 +1281,8 @@ def current_lifecycle_policy() -> "LifecyclePolicy | None":
 
 @contextmanager
 def lifecycle_policy_scope(
-    policy: "LifecyclePolicy | None",
-) -> Iterator["LifecyclePolicy | None"]:
+    policy: LifecyclePolicy | None,
+) -> Iterator[LifecyclePolicy | None]:
     """Bind ``policy`` as the active one for the duration of one run.
 
     Set once at a controlled entry point's root, alongside
@@ -1345,7 +1365,7 @@ def lifecycle_kwargs(*, adapter_name: str | None = None) -> dict[str, object]:
             further tightened to ``LifecyclePolicy.adapter_timeout(name)``
             when that is stricter than the time the run has left. An
             Expert calling an adapter it wants policy-aware timeouts for
-            names itself here - adapters sit outside the Agent/Expert
+            names itself here, since adapters sit outside the Agent/Expert
             tree the orchestrator instruments directly, so this is the
             one place that boundary is opted into rather than automatic.
     """
@@ -1378,7 +1398,7 @@ def pop_lifecycle_kwargs(kwargs: dict[str, Any]) -> AdapterLifecycle:
     Falls back to the ambient control when the caller passed neither. That
     matters more than it looks: it means an official adapter honours a
     cancellation even when the expert calling it was written before any of
-    this existed and forwards nothing - the same "existing code does not
+    this existed and forwards nothing, preserving the same "existing code does not
     need to know" property the rest of v0.12.0 relies on.
     """
     timeout = kwargs.pop(RESERVED_TIMEOUT_KWARG, None)
@@ -1419,7 +1439,7 @@ def stop_reason_code(error: BaseException) -> str:
 
 
 def stop_cause_id(
-    recorder: "TraceRecorder",
+    recorder: TraceRecorder,
     trace_id: str,
     fallback_event_id: str | None,
     error: BaseException,
