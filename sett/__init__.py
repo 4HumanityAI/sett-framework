@@ -19,7 +19,20 @@ Usage:
     from sett import SETTOrchestrator, SETTAgent, SETTExpert, EthicalFilter
 """
 
-__version__ = "0.13.0"
+import logging as _logging
+
+# Libraries must not choose an application's logging destination. A handler on
+# the package logger prevents Python's lastResort handler from writing WARNING+
+# records to stderr when the host has not configured logging. Records still
+# propagate normally to any handlers the host application installs.
+_sett_logger = _logging.getLogger(__name__)
+if not any(
+    isinstance(handler, _logging.NullHandler)
+    for handler in _sett_logger.handlers
+):
+    _sett_logger.addHandler(_logging.NullHandler())
+
+__version__ = "0.13.1"
 __author__ = "Eduardo Daniel Viñales"
 __license__ = "MIT"
 

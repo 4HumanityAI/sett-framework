@@ -2,6 +2,77 @@
 
 All notable changes to the SETT framework are documented here.
 
+## [0.13.1] - 2026-08-19
+
+Fail-closed routing and embedding-overhead patch, plus release-audit cleanup.
+
+### Origin
+
+A frozen comparative benchmark exposed avoidable steady-state action latency
+in SETT's governed execution path. Follow-up scenario-level profiling and
+repeated ablation isolated two confirmed contributors: synchronous
+`logging.lastResort` writes when the host application had not configured
+logging, and governance work performed before handler availability was known.
+The full protocol, comparisons, and measurements belong in the separate
+benchmark report; this entry records the release-relevant causal findings.
+
+### Changed
+
+- Importing `sett` now installs a package-level `logging.NullHandler` without
+  configuring the root logger. Applications that do not configure logging no
+  longer fall through to Python's synchronous stderr `lastResort` handler;
+  application-installed handlers still receive propagated records normally.
+- `SETTExecutor.submit()` resolves the exact handler before copying payloads,
+  reading environmental context, or invoking the `EthicalFilter`. An
+  unroutable action now emits `action.blocked` with the normalized verdict
+  `block` and reason `handler.not_registered`, then raises a structured
+  `SETTConfigurationError`. It does not create a false ethical verdict or a
+  false handler failure.
+- `SETTExecutor.submit_controlled()` now performs the same readiness and route
+  preflight before payload snapshots, fingerprints, idempotency reservations,
+  or handler-attempt events. An impossible action therefore cannot consume an
+  idempotency key or manufacture an attempt that never reached a handler.
+
+### Fixed
+
+- The concurrency reference now counts and names its five narrow thread-safe
+  exceptions consistently, including `UniversalMemory` in the practical
+  deployment guidance.
+- `CartesiaTTSAdapter` now reports a blank `voice_id` as a structured
+  `SETTServiceAdapterError` with configuration metadata instead of leaking a
+  native `ValueError`.
+
+### Documentation
+
+- Corrected the v0.13.0 changelog entry to include release-audit changes
+  that were already present in the published v0.13.0 source and release
+  notes but were mistakenly carried into the draft v0.13.1 entry. This
+  is a historical-record correction; no v0.13.1 behavior is attributed
+  to those earlier changes.
+- README.md's Install section documented `pip install sett-framework`
+  as though the package were available on PyPI. It is not, and there is
+  no near-term plan to publish it. The section now documents installing
+  from source instead.
+
+### Performance interpretation
+
+- The logging change directly affects emitted WARNING and ERROR records. The
+  early routing changes directly affect unroutable and unready actions.
+  Neither removes work from a registered ALLOW path, so this release does not
+  attribute an aggregate ALLOW-path improvement to these changes without a
+  separate, isolated measurement.
+- The ablation also observed an approximately 7% improvement on registered
+  ALLOW-shaped paths, even though those paths should not invoke either
+  corrected behavior. That result remains unexplained and is excluded from
+  the patch's claimed effects pending isolated investigation.
+
+### Validation
+
+- 1,003 tests pass, including the complete inherited suite and regressions
+  proving that unroutable or unready controlled submissions do not copy
+  payloads, evaluate policy, reserve idempotency keys, or open handler
+  attempts.
+
 ## [0.13.0] - 2026-08-16
 
 Provider-neutral adapter contracts, honest capability selection, passive
@@ -52,9 +123,6 @@ health, structured failures, opt-in resilience, and an expanded voice roster.
 - `CircuitBreaker` is now included explicitly in the documented concurrency
   guarantees; its failure accounting and one-time open transition are covered
   by an 8-thread, 2,000-failure stress test.
-- Late failures from calls already in flight no longer move a circuit's OPEN
-  timestamp or postpone recovery. A failed HALF_OPEN probe still starts a new
-  recovery timeout.
 - The living adapter and execution-context design documents now use stable
   canonical paths (`docs/adapter_contract.md` and
   `docs/execution_context.md`). Introduction and review versions live in each
@@ -70,6 +138,9 @@ health, structured failures, opt-in resilience, and an expanded voice roster.
 
 ### Fixed
 
+- Late failures from calls already in flight no longer move a circuit's OPEN
+  timestamp or postpone recovery. A failed HALF_OPEN probe still starts a new
+  recovery timeout.
 - The internal execution-context conformance helper `_is_uuid()` now imports
   `UUID` instead of raising `NameError` when called directly.
 

@@ -1027,8 +1027,9 @@ Action(action_type, payload={}, proposed_by="unknown")
 ### SETTExecutor
 
 The one gate for real side effects submitted through it as `Action`s
-(`submit()`/`submit_controlled()`): evaluates them through the
-`EthicalFilter`, and executes the registered handler only if approved.
+(`submit()`/`submit_controlled()`): first resolves the exact registered
+handler, then evaluates a routable action through the `EthicalFilter`, and
+executes the handler only if approved.
 This is a structural guarantee for the `Action`/`SETTExecutor` path
 specifically (F19, defensive audit #2); it cannot intercept a side
 effect performed directly in application code outside this path,
@@ -1043,13 +1044,24 @@ SETTExecutor()
 | Method | Returns | Description |
 |---|---|---|
 | `register_handler(action_type, handler)` | `None` | Registers the function that performs a given action type. This is the only code allowed to run that side effect. |
-| `submit(action, emotional_state="unknown", risk_profile=None, location_id="global")` | `Any` | Evaluates the action; if approved, calls the registered handler and returns its result. |
+| `submit(action, emotional_state="unknown", risk_profile=None, location_id="global")` | `Any` | Resolves the exact handler first. A routable action is evaluated; if approved, its handler runs and its result is returned. |
 | `get_audit_log()` | `list[dict]` | Actions that were actually approved and executed. Rejected or unhandled actions never appear here. |
 | `registered_action_types` *(property)* | `list[str]` | Action types with a handler currently registered. |
 
 Raises `SETTEthicalFilterRejectedError` if the `EthicalFilter` blocks the
 action (handler never runs), or `SETTConfigurationError` if no handler is
 registered for that `action_type` (fails closed, not open).
+
+An unroutable action does not copy its payload, read environmental context,
+or invoke the `EthicalFilter`. It records no ethical verdict because no policy
+evaluation occurred. When tracing is active, it emits `action.blocked` with
+`verdict="block"`, `decision_source="routing"`, and the stable reason code
+`handler.not_registered`. The raised `SETTConfigurationError` carries the same
+normalized verdict and reason as structured attributes. The Executor audit log
+continues to contain only actions that actually executed. `submit_controlled()`
+performs this preflight, plus attachment and filter readiness checks, before
+payload snapshots, fingerprints, idempotency reservations, and handler-attempt
+events.
 
 ---
 
@@ -1285,6 +1297,14 @@ Frozen dataclass.
 
 ---
 
+## Logging
+
+Importing `sett` attaches a `logging.NullHandler` to the package logger and
+does not configure the root logger. This prevents Python's fallback
+`lastResort` handler from writing library warnings to stderr when an embedding
+application has not configured logging. Records still propagate normally to
+handlers installed by the application on `sett` or any ancestor logger.
+
 ## Concurrency
 
 SETT's core components (`UniversalMemory`, `EthicalFilter`, `SETTExecutor`, `PrivateMemory`) are not evaluated under concurrent access, with five documented exceptions:
@@ -1295,14 +1315,21 @@ SETT's core components (`UniversalMemory`, `EthicalFilter`, `SETTExecutor`, `Pri
 - `InMemoryIdempotencyStore` (v0.12.0) holds an internal `threading.RLock()` around its records and its attempt log, so two threads reserving the same key cannot both come back holding it.
 - `CircuitBreaker` (v0.13.0) holds an internal `threading.RLock()` around state transitions, failure counts and half-open probe admission. One instance may be shared by concurrent callers: a stress test with 8 threads recording 250 transient failures each preserves all 2,000 failures and opens the circuit exactly once. This guarantee covers the breaker's own in-process state, not the adapter calls it guards.
 
-The scope of the registry, idempotency store, and circuit breaker is deliberately narrow: they protect *their own* state within one process. None extends any guarantee to the work being controlled. A handler, an adapter, an agent or a cleanup callback reached through them is on its own, exactly as everything else in this section. `InMemoryIdempotencyStore` in particular is a within-process guarantee only, and says nothing at all about what happened before the process started; an application injects a durable store when it needs more than that.
+All five guarantees are deliberately narrow: each protects only the state
+described above within one process. `UniversalMemory` protects its store and
+history, while `TraceRecorder` protects event order and its hash chain. The
+registry, idempotency store, and circuit breaker protect their own control
+state; none extends any guarantee to a handler, adapter, agent, cleanup
+callback, or exporter reached through them. `InMemoryIdempotencyStore` in
+particular says nothing about what happened before the process started; an
+application injects a durable store when it needs more than that.
 
-Outside of those four guarantees, SETT does not currently make a thread-safety claim for the framework as a whole: no adapter, agent base class, or expert base class has been tested under concurrent access, and none advertises being safe for it. This applies to `PrivateMemory`, `EthicalFilter`'s audit log, `SETTExecutor`'s audit log, and the LLM/TTS/STT/sentiment adapters equally.
+Outside of those five guarantees, SETT does not currently make a thread-safety claim for the framework as a whole: no adapter, agent base class, or expert base class has been tested under concurrent access, and none advertises being safe for it. This applies to `PrivateMemory`, `EthicalFilter`'s audit log, `SETTExecutor`'s audit log, and the LLM/TTS/STT/sentiment adapters equally.
 
 Practical implications for a deployment:
 
 - Running multiple `SETTOrchestrator` instances in separate processes or async tasks, each with its own agents, is the supported pattern for parallelism today (this is exactly what `EnvironmentalContext` and `publish_environmental_context()` exist to coordinate across instances).
-- Sharing a single `SETTAgent`, `PrivateMemory`, or `EthicalFilter` instance across multiple threads or concurrent coroutines without external synchronization is not a tested configuration. `TraceRecorder`, `ExecutionControlRegistry`, `InMemoryIdempotencyStore`, and `CircuitBreaker` are exceptions: they are built to be shared across threads.
+- Sharing a single `SETTAgent`, `PrivateMemory`, or `EthicalFilter` instance across multiple threads or concurrent coroutines without external synchronization is not a tested configuration. `UniversalMemory`, `TraceRecorder`, `ExecutionControlRegistry`, `InMemoryIdempotencyStore`, and `CircuitBreaker` are exceptions within the narrow scopes stated above: they are built to be shared across threads.
 - An STT adapter's `transcribe()` being called concurrently for overlapping audio streams is an application-layer concern: guard it in the calling Expert or Agent, not inside the adapter (this mirrors why `STTBase` deliberately does not own a listening loop or a lock itself).
 
 This is a documentation gap being closed, not a new restriction: the underlying behavior has not changed. A future release may extend the same lock-based pattern already used by `UniversalMemory` and `TraceRecorder` to other shared components if a real deployment need appears.
@@ -1323,7 +1350,7 @@ All SETT exceptions inherit from `SETTError`.
 | `SETTExpertNotFoundError` | An agent cannot find a registered expert by name. |
 | `SETTLLMAdapterError` | An LLM adapter fails to respond or is misconfigured (missing API key, network error, etc.). |
 | `SETTServiceAdapterError` | A TTS, STT, or generative AI adapter fails or is misconfigured. |
-| `SETTConfigurationError` | The framework or a component is incorrectly configured before the system starts. |
+| `SETTConfigurationError` | The framework or a component is incorrectly configured before the system starts. May carry a normalized fail-closed decision when an action has no route (see below). |
 | `SETTCancelledError` | Somebody asked for this execution to stop, through a `cancel()` call on it or on an ancestor. Carries structured attributes (see below). |
 | `SETTTimeoutError` | An `ExecutionControl` exceeded its `Deadline`. Nobody asked; the work did not fit in the time it was given, which is frequently retryable. Carries structured attributes (see below). |
 | `SETTDependencyError` | A unit never became reachable because something it needed failed. Deliberately not a cancellation: nobody ever asked anything of it. Carries structured attributes (see below). |
@@ -1353,6 +1380,21 @@ code should read these instead of parsing the message string:
 | `e.principle` | `str \| None` | The ruleset principle in effect. |
 | `e.reasoning` | `str \| None` | The analyzer's reasoning behind the score. |
 | `e.trace_event_id` | `str \| None` | Latest causal event for the rejection while unified tracing is active. |
+
+### Structured attributes on `SETTConfigurationError`
+
+Most configuration failures use only the human-readable message, so these
+attributes are `None`. An action with no registered handler uses them to expose
+an explicit normalized routing decision without claiming an EthicalFilter
+verdict:
+
+| Attribute | Type | Meaning |
+|---|---|---|
+| `e.reason_code` | `str \| None` | Stable machine-readable reason; `handler.not_registered` for an unroutable action. |
+| `e.verdict` | `str \| None` | Normalized execution decision; `block` for an unroutable action. |
+| `e.action_type` | `str \| None` | The action type that had no route. |
+| `e.action_id` | `str \| None` | Identifier of the affected `Action`. |
+| `e.trace_event_id` | `str \| None` | Latest causal trace event associated with the failure. |
 
 All attributes default to `None` if the exception is constructed with only
 a message, so existing raising code keeps working unchanged.
@@ -1508,9 +1550,10 @@ nobody can. Code that needs a true snapshot takes its own `deepcopy()`.
 | `register_controlled_handler(action_type, handler)` | `None` |
 | `idempotency_store` | `IdempotencyStore` |
 
-`submit_controlled()` wraps `submit()` rather than reimplementing it: the
-filter evaluation, the handler dispatch and every trace event of the
-effect boundary come from the same code, unchanged.
+`submit_controlled()` performs a static readiness and route preflight, then
+wraps `submit()` rather than reimplementing the executable path. Filter
+evaluation, handler dispatch, and every trace event at the effect boundary
+still come from the same implementation.
 
 ## `HandlerContext`
 

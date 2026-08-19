@@ -6,7 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from sett import CapabilitySupport
+from sett import AdapterErrorKind, CapabilitySupport
+from sett.exceptions import SETTServiceAdapterError
 from sett.services_tts_stt import (
     AssemblyAISTTAdapter,
     AzureSTTAdapter,
@@ -117,6 +118,18 @@ def test_whisper_and_cartesia_requests_are_explicit(fake_requests):
     assert cartesia.synthesize("hello") == b"mp3"
     assert fake_requests.calls[0][2]["data"]["model"] == "whisper-1"
     assert fake_requests.calls[1][2]["json"]["voice"] == {"id": "voice"}
+
+
+def test_cartesia_refuses_blank_voice_id_as_configuration_error(fake_requests):
+    for blank in ("", "   ", "\t\n"):
+        with pytest.raises(SETTServiceAdapterError) as excinfo:
+            CartesiaTTSAdapter(blank, "key")
+        error = excinfo.value
+        assert error.kind is AdapterErrorKind.CONFIGURATION
+        assert error.provider == "cartesia"
+        assert error.adapter_name == "CartesiaTTSAdapter"
+        assert error.reason_code == "adapter.voice_id_missing"
+    assert fake_requests.calls == []
 
 
 def test_assemblyai_upload_submit_and_poll(fake_requests):

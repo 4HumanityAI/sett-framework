@@ -107,6 +107,45 @@ class TestSETTExecutorUnit:
         with pytest.raises(SETTConfigurationError) as exc_info:
             executor.submit(Action(action_type="unregistered_type"))
         assert "unregistered_type" in str(exc_info.value)
+        assert exc_info.value.reason_code == "handler.not_registered"
+        assert exc_info.value.verdict == "block"
+        assert exc_info.value.action_type == "unregistered_type"
+        assert exc_info.value.action_id is not None
+
+    def test_missing_handler_skips_ethics_payload_and_environment_work(
+        self, monkeypatch
+    ):
+        class CopyTrap:
+            def __deepcopy__(self, memo):
+                raise AssertionError("unroutable payload was copied")
+
+        ethical_filter = EthicalFilter()
+        executor = SETTExecutor()
+        orchestrator = SETTOrchestrator(ethical_filter=ethical_filter)
+        orchestrator.register_executor(executor)
+
+        def unexpected(*args, **kwargs):
+            raise AssertionError("unroutable action reached governance work")
+
+        monkeypatch.setattr(ethical_filter, "_evaluate_with_trace", unexpected)
+        monkeypatch.setattr(
+            executor._universal_memory,
+            "read_environmental_context",
+            unexpected,
+        )
+        action = Action(
+            action_type="missing",
+            payload={"trap": CopyTrap()},
+            proposed_by="test",
+        )
+
+        with pytest.raises(SETTConfigurationError) as exc_info:
+            executor.submit(action)
+
+        assert exc_info.value.verdict == "block"
+        assert exc_info.value.action_id == action.action_id
+        assert ethical_filter.get_audit_log() == []
+        assert executor.get_audit_log() == []
 
     def test_missing_handler_does_not_execute_anything(self):
         calls = []

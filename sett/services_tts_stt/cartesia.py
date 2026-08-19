@@ -5,12 +5,14 @@ from typing import Any
 
 from sett.core_ruler.adapter import (
     AdapterCapabilities,
+    AdapterErrorKind,
     AdapterKind,
     CapabilitySupport,
     ConnectivityRequirement,
     adapter_call_scope,
 )
 from sett.core_ruler.lifecycle import pop_lifecycle_kwargs, validate_duration_seconds
+from sett.exceptions import SETTServiceAdapterError
 from sett.services_tts_stt._http import checked_request, credential, require_requests
 from sett.services_tts_stt.base import TTSBase
 
@@ -38,7 +40,13 @@ class CartesiaTTSAdapter(TTSBase):
         )
         self._voice_id = voice_id.strip()
         if not self._voice_id:
-            raise ValueError("voice_id must be a non-empty string")
+            raise SETTServiceAdapterError(
+                "Cartesia voice_id must be a non-empty string.",
+                kind=AdapterErrorKind.CONFIGURATION,
+                provider="cartesia",
+                adapter_name=type(self).__name__,
+                reason_code="adapter.voice_id_missing",
+            )
         self._model = model.strip() or "sonic-3"
         self._api_version = api_version
         self._endpoint = endpoint

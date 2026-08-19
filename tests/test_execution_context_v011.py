@@ -524,19 +524,33 @@ class TestActionTrace:
         orchestrator = SETTOrchestrator()
         orchestrator.register_executor(executor)
         orchestrator.register_agent(ActionAgent("missing"))
-        with pytest.raises(SETTConfigurationError):
+        with pytest.raises(SETTConfigurationError) as exc_info:
             orchestrator.process({}, domain="actions")
         kinds = event_kinds(orchestrator, orchestrator.last_trace_id)
-        assert "handler.failed" in kinds
+        assert "action.blocked" in kinds
+        assert "policy.evaluated" not in kinds
+        assert "action.approved" not in kinds
+        assert "handler.failed" not in kinds
         assert "handler.started" not in kinds
         events = orchestrator.get_trace(orchestrator.last_trace_id)
-        handler_failed = next(
-            event for event in events if event.kind == "handler.failed"
+        action_blocked = next(
+            event for event in events if event.kind == "action.blocked"
+        )
+        action_proposed = next(
+            event for event in events if event.kind == "action.proposed"
         )
         agent_failed = next(
             event for event in events if event.kind == "agent.failed"
         )
-        assert agent_failed.cause_id == handler_failed.event_id
+        assert action_blocked.status == "blocked"
+        assert action_blocked.cause_id == action_proposed.event_id
+        assert action_blocked.reason_codes == ("handler.not_registered",)
+        assert action_blocked.attributes["verdict"] == "block"
+        assert action_blocked.attributes["decision_source"] == "routing"
+        assert agent_failed.cause_id == action_blocked.event_id
+        assert exc_info.value.trace_event_id in {event.event_id for event in events}
+        assert exc_info.value.verdict == "block"
+        assert orchestrator.verify_traces(orchestrator.last_trace_id)
 
     def test_exporter_failure_blocks_real_world_effect(self):
         calls = []

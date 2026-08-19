@@ -38,6 +38,7 @@ from sett import (
     SETTOrchestrator,
     SETTTimeoutError,
     SETTValidationError,
+    UniversalMemory,
     action_fingerprint,
     classify_error,
 )
@@ -438,6 +439,84 @@ def test_a_retry_policy_without_an_idempotency_key_fails_closed():
     assert result.reason_code == "retry.key_required"
     with pytest.raises(SETTConfigurationError):
         result.unwrap()
+
+
+def test_an_unroutable_controlled_action_creates_no_attempt_or_reservation():
+    class CopyTrap:
+        def __deepcopy__(self, memo):
+            raise AssertionError("unroutable payload was copied")
+
+    store = InMemoryIdempotencyStore()
+    orchestrator, executor = build(store)
+    action = Action(
+        "missing_route",
+        {"trap": CopyTrap()},
+        idempotency_key="operation:never-routed",
+    )
+
+    result = executor.submit_controlled(action)
+
+    assert result.status is ExecutionStatus.FAILED
+    assert result.reason_code == "handler.not_registered"
+    assert store.get("operation:never-routed") is None
+    assert store.attempts_for("operation:never-routed") == ()
+    assert executor.get_audit_log() == []
+    assert result.exception.verdict == "block"
+    assert result.exception.action_id == action.action_id
+    events = orchestrator.get_trace(result.trace_id)
+    kinds = [event.kind for event in events]
+    assert kinds == ["action.proposed", "action.blocked"]
+    assert events[1].cause_id == events[0].event_id
+    assert orchestrator.verify_traces(result.trace_id)
+
+
+def test_an_unready_controlled_executor_does_no_payload_or_store_work():
+    class CopyTrap:
+        def __deepcopy__(self, memo):
+            raise AssertionError("payload was copied before executor preflight")
+
+    store = InMemoryIdempotencyStore()
+    executor = SETTExecutor(idempotency_store=store)
+    executor.register_handler("charge_payment", lambda payload: {"ok": True})
+    action = Action(
+        "charge_payment",
+        {"trap": CopyTrap()},
+        idempotency_key="operation:unattached",
+    )
+
+    result = executor.submit_controlled(action)
+
+    assert result.status is ExecutionStatus.FAILED
+    assert result.reason_code == "executor.not_attached"
+    assert store.get("operation:unattached") is None
+    assert store.attempts_for("operation:unattached") == ()
+    assert result.exception.verdict == "block"
+    assert result.exception.action_id == action.action_id
+
+
+def test_a_controlled_executor_without_a_filter_does_no_attempt_work():
+    class CopyTrap:
+        def __deepcopy__(self, memo):
+            raise AssertionError("payload was copied before filter preflight")
+
+    store = InMemoryIdempotencyStore()
+    executor = SETTExecutor(idempotency_store=store)
+    executor.attach_universal_memory(UniversalMemory())
+    executor.register_handler("charge_payment", lambda payload: {"ok": True})
+    action = Action(
+        "charge_payment",
+        {"trap": CopyTrap()},
+        idempotency_key="operation:no-filter",
+    )
+
+    result = executor.submit_controlled(action)
+
+    assert result.status is ExecutionStatus.FAILED
+    assert result.reason_code == "ethical_filter.not_configured"
+    assert store.get("operation:no-filter") is None
+    assert store.attempts_for("operation:no-filter") == ()
+    assert result.exception.verdict == "block"
+    assert result.exception.action_id == action.action_id
 
 
 # ── Attempts and retries ────────────────────────────────────────────────────

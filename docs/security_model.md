@@ -39,12 +39,21 @@ are true:
 
 1. it is attached through `SETTOrchestrator.register_executor()`;
 2. the attached `UniversalMemory` has an `EthicalFilter`;
-3. the filter approves the proposed `Action`;
-4. a handler is registered for the exact action type.
+3. a handler is registered for the exact action type;
+4. the filter approves the proposed `Action`.
 
 Any missing condition raises and no handler runs. Agents must also be registered
 before publishing results or proposing actions; detached agents no longer
 silently discard governed operations.
+
+Handler routing is resolved before policy work. If no exact route exists, SETT
+does not inspect or copy the payload and does not manufacture an ethical
+verdict. It emits the normalized trace decision `action.blocked` with
+`verdict="block"` and `handler.not_registered`, then raises a structured
+`SETTConfigurationError`. No handler boundary opens and no effect can run.
+The controlled path performs the same check before payload fingerprinting,
+idempotency reservation, or attempt tracing. Consequently an impossible
+action cannot consume a business key or appear as a handler attempt.
 
 ## Situation urgency is not action harm
 

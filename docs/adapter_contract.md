@@ -2,7 +2,7 @@
 
 Status: current framework contract  
 Introduced: SETT Framework v0.13.0  
-Last reviewed: SETT Framework v0.13.0
+Last reviewed: SETT Framework v0.13.1
 
 This is the canonical, living design document for SETT adapters. Future
 releases update this file in place; Git history and the changelog preserve the

@@ -233,7 +233,37 @@ class SETTConfigurationError(SETTError):
     """
     Raised when the framework or any of its components is incorrectly configured
     before the system starts running.
+
+    Configuration failures may also carry a normalized fail-closed decision.
+    An unroutable action uses ``verdict="block"`` and a stable ``reason_code``
+    without pretending that the EthicalFilter evaluated or rejected it. All
+    structured attributes default to ``None`` for existing call sites.
+
+    Attributes:
+        reason_code (str | None): Stable machine-readable failure reason.
+        verdict (str | None): Normalized execution decision, when applicable.
+        action_type (str | None): Action type that could not be configured.
+        action_id (str | None): Identifier of the affected Action.
+        trace_event_id (str | None): Causal event for this failure, if traced.
     """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        reason_code: str | None = None,
+        verdict: str | None = None,
+        action_type: str | None = None,
+        action_id: str | None = None,
+        trace_event_id: str | None = None,
+    ) -> None:
+        """Preserve optional structured context without requiring it."""
+        super().__init__(message)
+        self.reason_code = reason_code
+        self.verdict = verdict
+        self.action_type = action_type
+        self.action_id = action_id
+        self.trace_event_id = trace_event_id
 
 
 class SETTCancelledError(SETTError):

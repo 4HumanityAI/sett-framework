@@ -17,7 +17,7 @@ An expert never writes to `UniversalMemory` nor executes effects on the world on
 **3. Ethics as an architectural layer, not a prompt.** The central thesis. No component "behaves because it was asked to": the `EthicalFilter` intercepts structurally. Every design decision is evaluated against whether it reinforces or dilutes this thesis.
 
 **4. Actions as data (`SETTExecutor`), fail-closed.**
-Effects on the world are described as `Action` objects and executed only after the filter's verdict. The expert *physically has no reference* to the real client, so the guarantee is structural, not disciplinary. An `action_type` with no registered handler raises `SETTConfigurationError`: "I forgot to register the handler" never degrades into "it ran anyway."
+Effects on the world are described as `Action` objects and executed only after the filter's verdict. The expert *physically has no reference* to the real client, so the guarantee is structural, not disciplinary. Handler routing is resolved before policy evaluation: an `action_type` with no registered handler is normalized to `block` and raises `SETTConfigurationError` without manufacturing an ethical verdict. "I forgot to register the handler" never degrades into "it ran anyway."
 - Two paths coexist deliberately: `propose_action()` (lightweight, low risk) and `submit_action()` (structural, critical). Neither is imposed over the other.
 
 **5. The LLM is an engine, not architecture.**

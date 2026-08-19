@@ -9,12 +9,13 @@ Agents and experts never call the real client library directly. They
 describe intent as an Action and submit it here. The Executor:
 
     1. Receives the Action
-    2. Runs it through the EthicalFilter (Layer 1 action / Layer 2 user /
-       Layer 3 environment: the same three-layer system used everywhere
-       else in SETT)
-    3. If approved: invokes the handler registered for that action_type:
+    2. Resolves its handler, failing closed when no route exists
+    3. Runs a routable action through the EthicalFilter (Layer 1 action /
+       Layer 2 user / Layer 3 environment: the same three-layer system used
+       everywhere else in SETT)
+    4. If approved: invokes the handler registered for that action_type:
        this is the ONLY place the real side effect happens
-    4. Returns the handler's result upward, so the Orchestrator (and from
+    5. Returns the handler's result upward, so the Orchestrator (and from
        there, the application built on SETT) can incorporate
        it into the system's response
 
@@ -259,6 +260,95 @@ class SETTExecutor:
         self._handlers.pop(action_type, None)
         self._controlled_handlers.pop(action_type, None)
 
+    def _execution_configuration_error(
+        self, action: Action
+    ) -> SETTConfigurationError | None:
+        """Return a fail-closed error before any governance or attempt work."""
+        if self._universal_memory is None:
+            return SETTConfigurationError(
+                "SETTExecutor is not attached to a SETTOrchestrator. "
+                "Register it with orchestrator.register_executor(executor) "
+                "before submitting any action.",
+                reason_code="executor.not_attached",
+                verdict="block",
+                action_type=action.action_type,
+                action_id=action.action_id,
+            )
+        if not self._universal_memory.has_ethical_filter:
+            return SETTConfigurationError(
+                "SETTExecutor cannot run because its UniversalMemory has no "
+                "EthicalFilter. Real-world actions fail closed by default.",
+                reason_code="ethical_filter.not_configured",
+                verdict="block",
+                action_type=action.action_type,
+                action_id=action.action_id,
+            )
+        return None
+
+    def _record_action_proposed(
+        self,
+        action: Action,
+        context: ExecutionContext | None,
+        cause_id: str | None,
+    ) -> Any:
+        """Record one proposal without inspecting or copying its payload."""
+        if context is None or self._trace_recorder is None:
+            return None
+        return self._trace_recorder.record(
+            context,
+            kind="action.proposed",
+            component_type="executor",
+            component_name=action.action_type,
+            status="proposed",
+            cause_id=cause_id,
+            attributes={
+                "action_id": action.action_id,
+                "action_type": action.action_type,
+                "proposed_by": action.proposed_by,
+            },
+        )
+
+    def _unroutable_error(
+        self,
+        action: Action,
+        context: ExecutionContext | None,
+        cause_id: str | None,
+        proposed_event: Any = None,
+    ) -> SETTConfigurationError:
+        """Build the single normalized decision for an action with no route."""
+        blocked_event = None
+        if context is not None and self._trace_recorder is not None:
+            blocked_event = self._trace_recorder.record(
+                context,
+                kind="action.blocked",
+                component_type="executor",
+                component_name=action.action_type,
+                status="blocked",
+                cause_id=(
+                    proposed_event.event_id if proposed_event else cause_id
+                ),
+                reason_codes=("handler.not_registered",),
+                attributes={
+                    "action_id": action.action_id,
+                    "action_type": action.action_type,
+                    "verdict": "block",
+                    "decision_source": "routing",
+                },
+            )
+        return SETTConfigurationError(
+            f"No handler registered for action_type '{action.action_type}'. "
+            f"Call executor.register_handler({action.action_type!r}, your_function) "
+            f"before submitting this kind of action. "
+            f"Registered types: {list(self._handlers.keys())}",
+            reason_code="handler.not_registered",
+            verdict="block",
+            action_type=action.action_type,
+            action_id=action.action_id,
+            trace_event_id=(
+                blocked_event.event_id if blocked_event is not None else None
+            ),
+        )
+
     def submit(
         self,
         action: Action,
@@ -290,19 +380,32 @@ class SETTExecutor:
                 memory has no EthicalFilter, or no handler is registered for
                 this action type. Every configuration error fails closed.
         """
-        if self._universal_memory is None:
-            raise SETTConfigurationError(
-                "SETTExecutor is not attached to a SETTOrchestrator. "
-                "Register it with orchestrator.register_executor(executor) "
-                "before submitting any action."
-            )
-        if not self._universal_memory.has_ethical_filter:
-            raise SETTConfigurationError(
-                "SETTExecutor cannot run because its UniversalMemory has no "
-                "EthicalFilter. Real-world actions fail closed by default."
+        configuration_error = self._execution_configuration_error(action)
+        if configuration_error is not None:
+            raise configuration_error
+
+        # Resolve the route once, before policy evaluation or payload copying.
+        # An action with no handler cannot reach the world, so evaluating it
+        # would spend policy work on an impossible effect and record a verdict
+        # for something that never had an execution route. Holding the resolved
+        # callable also keeps routing consistent if registration changes later.
+        handler = self._handlers.get(action.action_type)
+        parent = execution_context or current_execution_context()
+        trace_cause = cause_id or current_trace_cause_id()
+        action_context = parent.derive() if parent is not None else None
+        proposed_event = self._record_action_proposed(
+            action, action_context, trace_cause
+        )
+
+        if handler is None:
+            raise self._unroutable_error(
+                action,
+                action_context,
+                trace_cause,
+                proposed_event,
             )
 
-        # One read of the caller's Action, at the door.
+        # One read of the caller's Action after the route is known to exist.
         #
         # The payload used to be read from the live object twice: once to
         # build the filter's context and again to call the handler. Between
@@ -318,25 +421,6 @@ class SETTExecutor:
         # same kind of guarantee. Reading once removes the second read
         # there was a race against, so no lock is needed.
         approved_payload = deepcopy(action.payload)
-
-        parent = execution_context or current_execution_context()
-        trace_cause = cause_id or current_trace_cause_id()
-        action_context = parent.derive() if parent is not None else None
-        proposed_event = None
-        if action_context is not None and self._trace_recorder is not None:
-            proposed_event = self._trace_recorder.record(
-                action_context,
-                kind="action.proposed",
-                component_type="executor",
-                component_name=action.action_type,
-                status="proposed",
-                cause_id=trace_cause,
-                attributes={
-                    "action_id": action.action_id,
-                    "action_type": action.action_type,
-                    "proposed_by": action.proposed_by,
-                },
-            )
 
         environmental_context = self._universal_memory.read_environmental_context(
             location_id
@@ -389,35 +473,6 @@ class SETTExecutor:
                 except (AttributeError, TypeError):
                     pass
             raise
-
-        handler = self._handlers.get(action.action_type)
-        if handler is None:
-            failed_event = None
-            if action_context is not None and self._trace_recorder is not None:
-                failed_event = self._trace_recorder.record(
-                    action_context,
-                    kind="handler.failed",
-                    component_type="handler",
-                    component_name=action.action_type,
-                    status="failed",
-                    cause_id=(
-                        self._trace_recorder.last_event_id(action_context.run_id)
-                        or (
-                            proposed_event.event_id
-                            if proposed_event else trace_cause
-                        )
-                    ),
-                    reason_codes=("handler.not_registered",),
-                )
-            error = SETTConfigurationError(
-                f"No handler registered for action_type '{action.action_type}'. "
-                f"Call executor.register_handler({action.action_type!r}, your_function) "
-                f"before submitting this kind of action. "
-                f"Registered types: {list(self._handlers.keys())}"
-            )
-            if failed_event is not None:
-                error.trace_event_id = failed_event.event_id
-            raise error
 
         approved_event = None
         authorized_event = None
@@ -635,13 +690,12 @@ class SETTExecutor:
     ) -> ExecutionResult[Any]:
         """Submit an action under lifecycle control and idempotency.
 
-        Wraps ``submit()`` rather than reimplementing it. The filter
-        evaluation, the handler dispatch and every trace event of the
-        effect boundary come from the same code v0.11.0 shipped, which is
-        untouched; what this method adds is layered strictly around it -
-        checkpoints, an idempotency reservation, attempt records and an
-        optional retry. There is one implementation of the path that can
-        actually reach the world, and it is the audited one.
+        Performs a static readiness and route preflight, then wraps
+        ``submit()`` rather than reimplementing the executable path. The
+        filter evaluation, handler dispatch, and every trace event at the
+        effect boundary still come from one audited implementation. This
+        method adds checkpoints, an idempotency reservation, attempt records,
+        and an optional retry only after the preflight succeeds.
 
         Nothing here raises for a stopped or failed *action*: a
         rejection, a timeout, a cancellation and a component failure all
@@ -714,6 +768,36 @@ class SETTExecutor:
                 trace_recorder=self._trace_recorder,
             )
         trace_id = submission_context.trace_id
+
+        # Static execution prerequisites come before retry configuration,
+        # payload snapshots, fingerprints, idempotency reservations and
+        # attempt events. None of those describes real progress when the
+        # action has no executable route or the governance boundary itself
+        # is unavailable.
+        configuration_error = self._execution_configuration_error(action)
+        if configuration_error is not None:
+            return self._submission_failure(
+                configuration_error,
+                control=control,
+                trace_id=trace_id,
+                reason_code=configuration_error.reason_code,
+            )
+        if action.action_type not in self._handlers:
+            proposed_event = self._record_action_proposed(
+                action, submission_context, trace_cause
+            )
+            routing_error = self._unroutable_error(
+                action,
+                submission_context,
+                trace_cause,
+                proposed_event,
+            )
+            return self._submission_failure(
+                routing_error,
+                control=control,
+                trace_id=trace_id,
+                reason_code=routing_error.reason_code,
+            )
 
         if policy.retries_enabled and not action.idempotency_key:
             # Retrying an action nobody can identify out in the world is

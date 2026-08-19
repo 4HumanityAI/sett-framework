@@ -7,14 +7,16 @@
 [![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.21287133-blue)](https://doi.org/10.5281/zenodo.21287133)
 [![Sponsor](https://img.shields.io/badge/sponsor-%E2%9D%A4-red)](https://github.com/sponsors/EduDanielV)
 
-**Current source release: 0.13.0** adds provider-neutral adapter capabilities,
+**Current source release: 0.13.1** includes the v0.13 adapter capabilities,
 passive health, normalized errors, explicit capability-based selection,
 sanitized adapter tracing, and opt-in retry/circuit breaking. SETT describes
 and filters adapters but never chooses a provider: applications construct,
 name, and order every route themselves. The voice roster now includes
 remote, local, and explicitly community/unofficial implementations, all
 behind the existing `TTSBase`/`STTBase` boundaries. A dependency-free
-`sett.testing` kit lets third-party adapters verify the same contract.
+`sett.testing` kit lets third-party adapters verify the same contract. This
+patch also removes implicit stderr logging overhead and rejects unroutable
+actions before governance, payload, or idempotency work begins.
 See [`docs/adapters.md`](docs/adapters.md), the canonical
 [`adapter contract`](docs/adapter_contract.md), and
 [`CHANGELOG.md`](CHANGELOG.md) for details.
@@ -22,7 +24,7 @@ See [`docs/adapters.md`](docs/adapters.md), the canonical
 Version 0.12.0 added lifecycle management: cancellation, deadlines,
 structured outcomes and idempotency, entirely alongside the existing API.
 Its controlled entry points remain separate from the original synchronous
-API and feed the adapter lifecycle contract used by 0.13.0.
+API and feed the adapter lifecycle contract introduced in 0.13.0.
 
 Before that, 0.11.0 introduced immutable, derivable `ExecutionContext`
 objects and complete causal tracing across routing, agents, experts,
@@ -77,18 +79,22 @@ and secure: instead of one large, opaque agent loop.
 
 ## Install
 
+SETT is not published on PyPI. Install it from source:
+
 ```bash
-pip install sett-framework
+git clone https://github.com/EduDanielV/sett-framework.git
+cd sett-framework
+pip install -e .
 
 # With LLM support
-pip install sett-framework[anthropic]   # Claude
-pip install sett-framework[openai]      # GPT
-pip install sett-framework[gemini]      # Gemini
-pip install sett-framework[all]         # All adapters
+pip install -e ".[anthropic]"   # Claude
+pip install -e ".[openai]"      # GPT
+pip install -e ".[gemini]"      # Gemini
+pip install -e ".[all]"         # All adapters
 ```
 
 > 💡 Want a free, offline, local LLM instead? `OllamaAdapter` needs no
-> extra `pip install` at all: just [Ollama](https://ollama.com) itself
+> extra install at all: just [Ollama](https://ollama.com) itself
 > running on your machine. See `docs/api_reference.md`.
 
 ## Quick start

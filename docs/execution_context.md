@@ -2,7 +2,7 @@
 
 Status: current design with preserved historical rationale  
 Introduced: SETT Framework v0.11.0  
-Last reviewed: SETT Framework v0.13.0  
+Last reviewed: SETT Framework v0.13.1  
 Original baseline: SETT Framework v0.10.1  
 Scope: framework-generic execution identity, causal trace propagation, safe trace export, and backward compatibility
 
@@ -137,7 +137,7 @@ Initial event kinds:
 - `pipeline.started`, `pipeline.stage_started`, `pipeline.stage_completed`, `pipeline.stage_rejected`, `pipeline.stage_skipped`, `pipeline.stage_failed`, `pipeline.completed`, `pipeline.rejected`, `pipeline.failed`
 - `memory.publication_proposed`, `memory.publication_committed`, `memory.publication_rejected`
 - `policy.evaluated`
-- `action.proposed`, `action.approved`, `action.rejected`
+- `action.proposed`, `action.approved`, `action.rejected`, `action.blocked`
 - `handler.authorized`, `handler.started`, `handler.completed`, `handler.failed`, `handler.blocked`
 
 Reason code examples:
@@ -151,6 +151,15 @@ Reason code examples:
 - `component.exception`
 
 The reason-code vocabulary is append-only during the 0.x line. Adding a code is compatible; changing the meaning of an existing code is not.
+
+`action.blocked` is a normalized execution decision, not an ethical verdict.
+It closes an unroutable proposal before payload copying, environmental lookup,
+or policy evaluation. Its safe attributes include `verdict="block"` and
+`decision_source="routing"`; `handler.not_registered` explains why no handler
+boundary was opened. The controlled submission path performs this same
+preflight before fingerprinting, idempotency reservation, or
+`handler.attempt_started`, so those events continue to mean that a real handler
+route existed.
 
 ### 3.3 TraceRecorder
 

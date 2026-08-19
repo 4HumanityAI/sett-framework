@@ -15,21 +15,26 @@ The SETT core has **zero mandatory dependencies**. LLM support is optional and i
 
 ## Installation
 
+SETT is not published on PyPI yet; install it from source.
+
 ```bash
+git clone https://github.com/EduDanielV/sett-framework.git
+cd sett-framework
+
 # Core framework: no LLM required
-pip install sett-framework
+pip install -e .
 
 # With Claude support (recommended)
-pip install sett-framework[anthropic]
+pip install -e ".[anthropic]"
 
 # With GPT support
-pip install sett-framework[openai]
+pip install -e ".[openai]"
 
 # With Gemini support
-pip install sett-framework[gemini]
+pip install -e ".[gemini]"
 
 # All adapters at once
-pip install sett-framework[all]
+pip install -e ".[all]"
 ```
 
 An adapter must always be explicitly constructed and named by the
