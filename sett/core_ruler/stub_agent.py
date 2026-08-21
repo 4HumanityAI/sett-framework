@@ -24,6 +24,7 @@ Usage:
     #                                              # same domain string
 """
 from __future__ import annotations
+
 from typing import Any
 
 from sett.core_ruler.agent import SETTAgent

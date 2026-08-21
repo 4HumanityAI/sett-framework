@@ -26,6 +26,7 @@ Levels:
     5: EMERGENCY    Systemic emergency. Maximum response protocol.
 """
 from __future__ import annotations
+
 from enum import IntEnum
 
 

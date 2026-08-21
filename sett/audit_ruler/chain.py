@@ -7,9 +7,9 @@ whole process state still requires an external signature or trusted sink.
 """
 from __future__ import annotations
 
+import json
 from copy import deepcopy
 from hashlib import sha256
-import json
 from typing import Any
 
 _GENESIS_HASH = "0" * 64

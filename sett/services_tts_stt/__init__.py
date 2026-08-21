@@ -23,6 +23,7 @@ from sett.services_tts_stt.local import (
 )
 from sett.services_tts_stt.openai_audio import WhisperSTTAdapter
 from sett.services_tts_stt.piper import PiperTTSAdapter
+from sett.services_tts_stt.pocket_tts import PocketTTSAdapter
 
 __all__ = [
     "AssemblyAISTTAdapter",
@@ -40,6 +41,7 @@ __all__ = [
     "LocalSTTAdapter",
     "LocalTTSAdapter",
     "PiperTTSAdapter",
+    "PocketTTSAdapter",
     "PyttsxTTSAdapter",
     "STTBase",
     "TTSBase",

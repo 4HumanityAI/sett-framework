@@ -242,7 +242,7 @@ class ExecutionResult(Generic[T]):
         state: ExecutionState,
         trace_id: str,
         run_id: str | None = None,
-    ) -> "ExecutionResult[T]":
+    ) -> ExecutionResult[T]:
         """Build a successful result; refuses a non-SUCCESS state."""
         if state.status is not ExecutionStatus.SUCCESS:
             raise SETTValidationError(
@@ -259,7 +259,7 @@ class ExecutionResult(Generic[T]):
         trace_id: str,
         run_id: str | None = None,
         value: T | None = None,
-    ) -> "ExecutionResult[T]":
+    ) -> ExecutionResult[T]:
         """Build a non-successful result around the real exception."""
         if state.status is ExecutionStatus.SUCCESS:
             raise SETTValidationError(
@@ -283,7 +283,7 @@ class ExecutionResult(Generic[T]):
         run_id: str | None = None,
         failed_dependency_run_id: str | None = None,
         message: str | None = None,
-    ) -> "ExecutionResult[T]":
+    ) -> ExecutionResult[T]:
         """Build the result of a unit that never became reachable.
 
         Carries a ``SETTDependencyError``, so unwrapping it names the

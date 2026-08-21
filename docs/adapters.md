@@ -84,12 +84,38 @@ All implementations are peers. Import concrete classes from
 
 | Kind | Adapters |
 |---|---|
-| TTS | `GoogleTTSAdapter`, `ElevenLabsTTSAdapter`, `AzureTTSAdapter`, `CartesiaTTSAdapter`, `LocalTTSAdapter`, `KokoroTTSAdapter`, `PiperTTSAdapter`, `EdgeTTSAdapter` |
+| TTS | `GoogleTTSAdapter`, `ElevenLabsTTSAdapter`, `AzureTTSAdapter`, `CartesiaTTSAdapter`, `LocalTTSAdapter`, `KokoroTTSAdapter`, `PiperTTSAdapter`, `PocketTTSAdapter`, `EdgeTTSAdapter` |
 | STT | `GoogleSTTAdapter`, `DeepgramSTTAdapter`, `AzureSTTAdapter`, `AssemblyAISTTAdapter`, `GladiaSTTAdapter`, `WhisperSTTAdapter`, `LocalSTTAdapter` |
 
 `LocalTTSAdapter` uses pyttsx3 host voices. `LocalSTTAdapter` uses a lazily
 loaded faster-whisper model. `PyttsxTTSAdapter` and
 `FasterWhisperSTTAdapter` are descriptive aliases for those two classes.
+`LocalTTSAdapter.synthesize()` accepts `language_code` for host-voice
+matching. `LocalSTTAdapter.transcribe()` accepts the same name and retains
+`language` as a compatibility alias; both are normalized to the primary
+subtag faster-whisper expects.
+
+Every official STT adapter that exposes language selection accepts
+`language_code`. Azure and Deepgram accept it at construction and per call;
+Gladia and hosted Whisper accept it per call. Hosted Whisper and LocalSTT
+reduce a BCP-47 tag to the primary subtag their providers expect. Historical
+`language` spellings remain compatibility aliases.
+
+Official TTS adapters with per-call BCP-47 selection use the same canonical
+name, including Azure, Cartesia, Google, and LocalTTS. Supplying both names
+with different effective tags fails before provider work instead of silently
+choosing one or discarding `language_code`.
+
+`PocketTTSAdapter` uses Kyutai Pocket TTS 2.1. Install it from the source tree
+with `pip install -e ".[pocket-tts]"`. The adapter loads its model and voice
+state on first use and returns one complete mono PCM16 WAV payload. It reports
+`streaming=NO` because SETT does not expose the provider's chunk iterator
+through `TTSBase`. It reports voice cloning because Pocket TTS accepts caller
+audio or exported voice states. A first model or catalog-voice load may
+download assets; cached assets do not require a remote synthesis service.
+Pocket TTS documents one model instance as unsafe for concurrent generation,
+so the adapter serializes calls. SETT does not bundle model weights or voices;
+applications remain responsible for voice consent and applicable licenses.
 
 `EdgeTTSAdapter` is explicitly community/unofficial: `edge-tts` calls an
 internal Microsoft Edge reader-mode service, not the supported Azure Speech

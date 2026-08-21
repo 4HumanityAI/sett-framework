@@ -10,6 +10,7 @@ Don't register this expert anywhere yourself: that's the job of the
 agent that owns it, via self.register_expert(...). See agent_template.py.
 """
 from __future__ import annotations
+
 from typing import Any
 
 from sett import SETTExpert

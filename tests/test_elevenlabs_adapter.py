@@ -13,10 +13,10 @@ pytest.importorskip(
     reason="ElevenLabsTTSAdapter needs the 'requests' package (extra: [elevenlabs])",
 )
 
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
-from sett.services_tts_stt.elevenlabs import ElevenLabsTTSAdapter
 from sett.exceptions import SETTServiceAdapterError
+from sett.services_tts_stt.elevenlabs import ElevenLabsTTSAdapter
 
 
 def _fake_response(status_code: int = 200, content: bytes = b"fake-mp3-bytes", text: str = ""):
@@ -159,5 +159,5 @@ class TestElevenLabsTTSAdapterErrorHandling:
             assert False, "should have raised"
         except SETTServiceAdapterError:
             pass
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             pytest.fail(f"Leaked non-SETT exception type: {type(e)}")

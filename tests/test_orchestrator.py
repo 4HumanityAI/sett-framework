@@ -11,23 +11,22 @@ Strategy (following the 70/20/10 approach):
 Each test documents a contract. If a test breaks, a contract broke.
 """
 import pytest
-from sett import (
-    SETTOrchestrator,
-    SETTAgent,
-    SETTExpert,
-    EthicalFilter,
-    SETTAgentNotFoundError,
-    SETTExpertNotFoundError,
-    SETTConfigurationError,
-)
 
+from sett import (
+    SETTAgent,
+    SETTAgentNotFoundError,
+    SETTConfigurationError,
+    SETTExpert,
+    SETTExpertNotFoundError,
+    SETTOrchestrator,
+)
 
 # ── Test doubles (minimal implementations for testing) ──────────────────────
 
 class CountingExpert(SETTExpert):
     """Expert that counts how many times it has been called."""
 
-    def __init__(self, name: str, return_value: dict = None):
+    def __init__(self, name: str, return_value: dict | None = None):
         super().__init__(name=name)
         self.call_count = 0
         self._return = return_value or {"status": "ok"}
@@ -42,7 +41,7 @@ class CountingExpert(SETTExpert):
 class SimpleAgent(SETTAgent):
     """Minimal agent that delegates to one expert and publishes the result."""
 
-    def __init__(self, domain: str = "test", expert_result: dict = None):
+    def __init__(self, domain: str = "test", expert_result: dict | None = None):
         super().__init__(name=f"SimpleAgent[{domain}]", domain=domain)
         self._expert = CountingExpert("main", expert_result or {"result": "done"})
         self.register_expert(self._expert)

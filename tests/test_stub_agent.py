@@ -4,7 +4,7 @@ SETT Framework: Tests: StubDomainAgent
 Tests for the generic placeholder agent used to assemble multi-domain
 systems incrementally before every domain has a real implementation.
 """
-from sett import SETTOrchestrator, EthicalFilter, StubDomainAgent
+from sett import EthicalFilter, SETTOrchestrator, StubDomainAgent
 
 
 class TestStubDomainAgent:

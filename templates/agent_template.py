@@ -13,6 +13,7 @@ You don't need to touch anything in the framework to add or remove an
 agent. Removing one is simply not calling register_agent() with it.
 """
 from __future__ import annotations
+
 from typing import Any
 
 from sett import SETTAgent
@@ -38,7 +39,6 @@ class MyAgent(SETTAgent):
         # number, it depends on how many distinct tasks your domain
         # needs. See CONVENTIONS.md once it exists.
         # self.register_expert(MyExpert(name="my_expert"))
-        pass
 
     def process(self, input_data: dict[str, Any]) -> dict[str, Any]:
         # TODO: call your expert(s) and combine their results.

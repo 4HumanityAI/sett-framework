@@ -22,17 +22,16 @@ Run with:
     PYTHONPATH=. python examples/with_executor.py
 """
 from sett import (
-    SETTOrchestrator,
-    SETTAgent,
-    SETTExpert,
-    SETTExecutor,
     EthicalFilter,
     EthicalRuleset,
     RiskProfile,
-    SETTEthicalFilterRejectedError,
+    SETTAgent,
     SETTConfigurationError,
+    SETTEthicalFilterRejectedError,
+    SETTExecutor,
+    SETTExpert,
+    SETTOrchestrator,
 )
-
 
 # ── SIMULATED EXTERNAL CLIENTS ───────────────────────────────────────────────
 # In a real system these would be a Twilio client, a hospital's emergency
@@ -176,7 +175,7 @@ if __name__ == "__main__":
         )
         print("  Handler ran (unexpected)")
     except SETTEthicalFilterRejectedError as e:
-        print(f"  ✗ BLOCKED before the handler ran: no SMS was sent.")
+        print("  ✗ BLOCKED before the handler ran: no SMS was sent.")
         print(f"    Reason: {str(e)[:120]}...")
 
     # ── Scenario 4: no handler registered: fails closed, not open ──────────
@@ -195,7 +194,7 @@ if __name__ == "__main__":
         )
         print("  Handler ran (unexpected)")
     except SETTConfigurationError as e:
-        print(f"  ✗ Failed closed: no handler means no side effect, not a silent no-op.")
+        print("  ✗ Failed closed: no handler means no side effect, not a silent no-op.")
         print(f"    Reason: {str(e)[:120]}...")
 
     # ── Executor audit log ───────────────────────────────────────────────────

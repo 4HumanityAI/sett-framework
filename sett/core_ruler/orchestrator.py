@@ -745,7 +745,7 @@ class SETTOrchestrator:
             # via the `with control` block above unwinding; propagating
             # here just lets the interpreter's own shutdown continue.
             raise
-        except BaseException as error:
+        except BaseException as error:  # noqa: BLE001
             status, reason_code = self._status_for(error)
             self._trace_recorder.record(
                 root,
@@ -1703,7 +1703,7 @@ class SETTOrchestrator:
         except (KeyboardInterrupt, SystemExit, GeneratorExit):
             # As in process_controlled(): not a stopped run, propagate.
             raise
-        except BaseException as error:
+        except BaseException as error:  # noqa: BLE001
             # Reached only for configuration errors and component
             # exceptions: the stage-level stops above are recorded as
             # outcomes, not raised.

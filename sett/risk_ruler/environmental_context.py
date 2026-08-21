@@ -28,6 +28,7 @@ Privacy design:
     do not put names, biometrics, or other identifiers into `message`.
 """
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -173,7 +174,7 @@ class EnvironmentalContext:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "EnvironmentalContext":
+    def from_dict(cls, data: dict[str, Any]) -> EnvironmentalContext:
         """Reconstruct from UniversalMemory storage.
 
         F03 fix (defensive audit #2): ``timestamp`` used to be dropped
@@ -194,7 +195,7 @@ class EnvironmentalContext:
         return cls(**kwargs)
 
     @classmethod
-    def normal(cls, location_id: str = "global") -> "EnvironmentalContext":
+    def normal(cls, location_id: str = "global") -> EnvironmentalContext:
         """Returns a baseline normal context for a location."""
         return cls(
             risk_level=RiskLevel.LEVEL_0,

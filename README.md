@@ -7,7 +7,7 @@
 [![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.21287133-blue)](https://doi.org/10.5281/zenodo.21287133)
 [![Sponsor](https://img.shields.io/badge/sponsor-%E2%9D%A4-red)](https://github.com/sponsors/EduDanielV)
 
-**Current source release: 0.13.1** includes the v0.13 adapter capabilities,
+**Current source release: 0.13.2** includes the v0.13 adapter capabilities,
 passive health, normalized errors, explicit capability-based selection,
 sanitized adapter tracing, and opt-in retry/circuit breaking. SETT describes
 and filters adapters but never chooses a provider: applications construct,
@@ -16,7 +16,9 @@ remote, local, and explicitly community/unofficial implementations, all
 behind the existing `TTSBase`/`STTBase` boundaries. A dependency-free
 `sett.testing` kit lets third-party adapters verify the same contract. This
 patch also removes implicit stderr logging overhead and rejects unroutable
-actions before governance, payload, or idempotency work begins.
+actions before governance, payload, or idempotency work begins. The local
+voice roster now includes an optional Kyutai Pocket TTS adapter with lazy
+model loading, voice conditioning, and complete PCM16 WAV output.
 See [`docs/adapters.md`](docs/adapters.md), the canonical
 [`adapter contract`](docs/adapter_contract.md), and
 [`CHANGELOG.md`](CHANGELOG.md) for details.

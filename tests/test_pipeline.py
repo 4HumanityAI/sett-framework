@@ -29,10 +29,8 @@ from sett import (
     SETTAgentNotFoundError,
     SETTConfigurationError,
     SETTOrchestrator,
-    StageOutcome,
 )
 from sett.ethics_ruler.ethic_kernel.rules import EthicalRuleset
-
 
 # ── Test agents ──────────────────────────────────────────────────────────────
 

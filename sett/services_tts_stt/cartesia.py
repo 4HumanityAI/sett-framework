@@ -14,11 +14,16 @@ from sett.core_ruler.adapter import (
 from sett.core_ruler.lifecycle import pop_lifecycle_kwargs, validate_duration_seconds
 from sett.exceptions import SETTServiceAdapterError
 from sett.services_tts_stt._http import checked_request, credential, require_requests
+from sett.services_tts_stt._language import resolve_language_code
 from sett.services_tts_stt.base import TTSBase
 
 
 class CartesiaTTSAdapter(TTSBase):
-    """Synthesize complete transcripts through Cartesia's bytes endpoint."""
+    """Synthesize complete transcripts through Cartesia's bytes endpoint.
+
+    Per-call BCP-47 selection uses ``language_code``; ``language`` remains a
+    compatibility alias.
+    """
 
     def __init__(
         self,
@@ -88,8 +93,16 @@ class CartesiaTTSAdapter(TTSBase):
                     "sample_rate": int(kwargs.get("sample_rate", 44100)),
                 },
             }
-            if kwargs.get("language"):
-                payload["language"] = str(kwargs["language"])
+            language_code = resolve_language_code(
+                kwargs.pop("language_code", None),
+                kwargs.pop("language", None),
+                default=None,
+                provider="cartesia",
+                adapter_name=type(self).__name__,
+                operation="synthesize",
+            )
+            if language_code:
+                payload["language"] = language_code
             response = checked_request(
                 "POST",
                 self._endpoint,

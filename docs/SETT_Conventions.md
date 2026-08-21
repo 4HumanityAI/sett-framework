@@ -179,6 +179,16 @@ A version that is ready and verified gets published when it's ready, never held 
 
 **21. Versioning.** Additive with new public API → minor (0.x.0). Docs only → commit or patch, no new release if the package itself doesn't change. Nothing gets bumped without explicit confirmation backed by evidence in hand. Don't fragment two already-finished pieces of work into separate releases if they're going to be published at the same time (the flip side of #19: that protects against splitting up what's already ready; #19 protects against holding back what's already ready).
 
+**Explicit v0.13.2 exception.** `PocketTTSAdapter` is additive public API in
+the `sett.services_tts_stt` submodule and would ordinarily require a minor
+release under this convention. The maintainer explicitly chose to keep it in
+the still-unpublished v0.13.2 patch because Pocket TTS became known only days
+before that release closed and met an immediate need for a local CPU TTS
+option. Splitting one completed review cycle into two unpublished versions
+would create history rather than preserve it. This is a recorded one-time
+exception, not a reinterpretation of public API and not a precedent that
+weakens the default rule for future additive symbols.
+
 ---
 
 *Note: the original textual wording of rule #1 ended up written on the

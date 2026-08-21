@@ -10,13 +10,12 @@ Key contracts tested:
   - EnvironmentalContext is stored and retrieved correctly
   - Thread safety: concurrent writes don't corrupt state
 """
-import pytest
 import threading
+
 from sett.memory_ruler.private import PrivateMemory
 from sett.memory_ruler.universal import UniversalMemory
-from sett.risk_ruler.risk_level import RiskLevel
 from sett.risk_ruler.environmental_context import EnvironmentalContext
-
+from sett.risk_ruler.risk_level import RiskLevel
 
 # ── PrivateMemory tests ──────────────────────────────────────────────────────
 
@@ -224,7 +223,7 @@ class TestUniversalMemory:
             try:
                 for i in range(50):
                     mem.update(domain, {"count": i})
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 errors.append(e)
 
         threads = [

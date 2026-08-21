@@ -38,14 +38,15 @@ Privacy note:
     without any identifying information about the individual.
 """
 from __future__ import annotations
+
 import math
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Any
 
-from sett.risk_ruler.risk_level import RiskLevel
 from sett.exceptions import SETTValidationError
+from sett.risk_ruler.risk_level import RiskLevel
 
 
 @dataclass
@@ -183,7 +184,7 @@ class RiskProfile:
             {key: float(value) for key, value in weights.items()}
         )
 
-    def __deepcopy__(self, memo: dict[int, Any]) -> "RiskProfile":
+    def __deepcopy__(self, memo: dict[int, Any]) -> RiskProfile:
         """Deep-copy safely around the frozen ``_weights`` mapping.
 
         ``RiskProfile`` instances are deep-copied throughout this
@@ -268,7 +269,7 @@ class RiskProfile:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "RiskProfile":
+    def from_dict(cls, data: dict[str, Any]) -> RiskProfile:
         """Reconstruct a RiskProfile from a dict stored in PrivateMemory.
 
         F12 fix (defensive audit #2): ``timestamp`` used to be dropped
@@ -289,7 +290,7 @@ class RiskProfile:
         return cls(**kwargs)
 
     @classmethod
-    def baseline(cls) -> "RiskProfile":
+    def baseline(cls) -> RiskProfile:
         """Returns a neutral baseline profile with all pillars at 0."""
         return cls(
             emotional_instability=0.0,

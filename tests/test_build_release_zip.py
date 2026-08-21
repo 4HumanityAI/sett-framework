@@ -18,7 +18,7 @@ from zipfile import ZipFile
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
-import build_release_zip as brz  # noqa: E402
+import build_release_zip as brz
 
 
 def _make_tree(root: Path) -> None:
@@ -132,7 +132,7 @@ def test_pycache_and_compiled_python_are_excluded(synthetic_project):
     files = brz.included_files(synthetic_project)
     relative = {p.relative_to(synthetic_project).as_posix() for p in files}
     assert not any("__pycache__" in r for r in relative)
-    assert not any(r.endswith(".pyc") or r.endswith(".pyo") for r in relative)
+    assert not any(r.endswith((".pyc", ".pyo")) for r in relative)
 
 
 def test_coverage_and_ds_store_files_are_excluded(synthetic_project):

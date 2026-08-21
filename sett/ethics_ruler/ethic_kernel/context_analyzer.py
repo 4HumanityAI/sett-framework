@@ -21,16 +21,18 @@ from __future__ import annotations
 
 import math
 import unicodedata
-from typing import Any, TYPE_CHECKING
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from sett.exceptions import SETTValidationError
 
 if TYPE_CHECKING:
-    from sett.risk_ruler.risk_profile import RiskProfile
     from sett.risk_ruler.environmental_context import EnvironmentalContext
     from sett.risk_ruler.risk_level import RiskLevel
+    from sett.risk_ruler.risk_profile import RiskProfile
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,7 +146,7 @@ class ContextAnalysis:
         reasoning: str,
         consequences: list[str],
         human_at_risk: bool = False,
-        risk_level: "RiskLevel | None" = None,
+        risk_level: RiskLevel | None = None,
         safety_assessment: SafetyAssessment | None = None,
     ) -> None:
         """Hold one analysis; refuses a risk_score no threshold can compare."""
@@ -209,26 +211,28 @@ class ContextAnalyzer:
     """
 
     # Emotional state → base risk modifier
-    EMOTIONAL_RISK_MODIFIERS: dict[str, float] = {
-        "calm": 0.0,
-        "happy": 0.0,
-        "neutral": 0.0,
-        "sad": 1.0,
-        "anxious": 1.5,
-        "angry": 2.0,
-        "confused": 1.5,
-        "distressed": 3.0,
-        "crisis": 5.0,
-        "unknown": 0.5,
-    }
+    EMOTIONAL_RISK_MODIFIERS: ClassVar[Mapping[str, float]] = MappingProxyType(
+        {
+            "calm": 0.0,
+            "happy": 0.0,
+            "neutral": 0.0,
+            "sad": 1.0,
+            "anxious": 1.5,
+            "angry": 2.0,
+            "confused": 1.5,
+            "distressed": 3.0,
+            "crisis": 5.0,
+            "unknown": 0.5,
+        }
+    )
 
     def analyze(
         self,
         action: str,
         context: dict[str, Any],
         emotional_state: str = "unknown",
-        risk_profile: "RiskProfile | None" = None,
-        environmental_context: "EnvironmentalContext | None" = None,
+        risk_profile: RiskProfile | None = None,
+        environmental_context: EnvironmentalContext | None = None,
     ) -> ContextAnalysis:
         """
         Full three-layer analysis of a proposed action.
@@ -247,7 +251,6 @@ class ContextAnalyzer:
         Returns:
             A ContextAnalysis with the combined risk assessment.
         """
-        from sett.risk_ruler.risk_level import RiskLevel
 
         # ── Layer 1: Action base score ────────────────────────────────────────
         base_score = self._base_risk_score(action, context)
@@ -351,8 +354,8 @@ class ContextAnalyzer:
         self,
         context: dict[str, Any],
         risk_score: float,
-        risk_profile: "RiskProfile | None",
-        environmental_context: "EnvironmentalContext | None",
+        risk_profile: RiskProfile | None,
+        environmental_context: EnvironmentalContext | None,
     ) -> bool:
         """
         Determines if a human is in immediate risk.
@@ -377,22 +380,23 @@ class ContextAnalyzer:
             return True
 
         # RiskProfile: high emotional instability alone is a signal
-        if risk_profile is not None:
-            if risk_profile.emotional_instability >= 0.85:
-                return True
+        if (
+            risk_profile is not None
+            and risk_profile.emotional_instability >= 0.85
+        ):
+            return True
 
         # Environmental context: level 4+ means humans are at risk by definition
-        if environmental_context is not None:
-            if environmental_context.risk_level.is_critical():
-                return True
-
-        return False
+        return (
+            environmental_context is not None
+            and environmental_context.risk_level.is_critical()
+        )
 
     def _assess_consequences(
         self,
         action: str,
         context: dict[str, Any],
-        environmental_context: "EnvironmentalContext | None" = None,
+        environmental_context: EnvironmentalContext | None = None,
     ) -> list[str]:
         """Build a list of possible consequences for this action."""
         consequences = []
@@ -425,8 +429,8 @@ class ContextAnalyzer:
         profile_modifier: float,
         env_modifier: float,
         emotional_state: str,
-        risk_profile: "RiskProfile | None",
-        env_level: "RiskLevel | None",
+        risk_profile: RiskProfile | None,
+        env_level: RiskLevel | None,
     ) -> str:
         """Build a human-readable explanation of the full analysis."""
         parts = [

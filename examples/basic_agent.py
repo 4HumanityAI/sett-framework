@@ -7,12 +7,11 @@ one orchestrator, one agent, two experts.
 Run this to verify your SETT installation works correctly.
 """
 from sett import (
-    SETTOrchestrator,
+    EthicalFilter,
     SETTAgent,
     SETTExpert,
-    EthicalFilter,
+    SETTOrchestrator,
 )
-
 
 # ── Step 1: Define experts ──────────────────────────────────────────────────
 

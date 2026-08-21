@@ -10,6 +10,7 @@ reusable ruleset system that any SETT deployment can customize.
 The guiding principle: "Do not cause direct or indirect harm to human beings."
 """
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from enum import Enum
 

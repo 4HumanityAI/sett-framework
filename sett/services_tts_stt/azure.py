@@ -22,6 +22,7 @@ from sett.services_tts_stt._http import (
     require_requests,
     response_json,
 )
+from sett.services_tts_stt._language import resolve_language_code
 from sett.services_tts_stt.base import STTBase, TTSBase
 
 
@@ -44,7 +45,12 @@ def _region(value: str | None, adapter_name: str) -> str:
 
 
 class AzureTTSAdapter(TTSBase):
-    """Synthesize a complete SSML request through Azure Speech."""
+    """Synthesize a complete SSML request through Azure Speech.
+
+    ``language_code`` is the canonical BCP-47 argument. The historical
+    ``language`` spelling remains a compatibility alias at construction and
+    per call.
+    """
 
     def __init__(
         self,
@@ -52,7 +58,8 @@ class AzureTTSAdapter(TTSBase):
         region: str | None = None,
         *,
         voice: str = "en-US-AvaMultilingualNeural",
-        language: str = "en-US",
+        language_code: str | None = None,
+        language: str | None = None,
         output_format: str = "audio-24khz-48kbitrate-mono-mp3",
         endpoint: str | None = None,
         timeout_seconds: float = 60,
@@ -62,7 +69,14 @@ class AzureTTSAdapter(TTSBase):
         self._api_key = _speech_key(api_key, type(self).__name__)
         self._region = _region(region, type(self).__name__)
         self._voice = voice
-        self._language = language
+        self._language_code = resolve_language_code(
+            language_code,
+            language,
+            default="en-US",
+            provider="azure_speech",
+            adapter_name=type(self).__name__,
+            operation="configure",
+        )
         self._output_format = output_format
         self._endpoint = endpoint or (
             f"https://{self._region}.tts.speech.microsoft.com/cognitiveservices/v1"
@@ -96,10 +110,17 @@ class AzureTTSAdapter(TTSBase):
             lifecycle = pop_lifecycle_kwargs(kwargs)
             lifecycle.throw_if_cancelled()
             voice = str(kwargs.get("voice", self._voice))
-            language = str(kwargs.get("language", self._language))
+            language_code = resolve_language_code(
+                kwargs.pop("language_code", None),
+                kwargs.pop("language", None),
+                default=self._language_code,
+                provider="azure_speech",
+                adapter_name=type(self).__name__,
+                operation="synthesize",
+            )
             output_format = str(kwargs.get("output_format", self._output_format))
             ssml = (
-                f"<speak version='1.0' xml:lang={quoteattr(language)}>"
+                f"<speak version='1.0' xml:lang={quoteattr(language_code)}>"
                 f"<voice name={quoteattr(voice)}>{escape(text)}</voice></speak>"
             )
             response = checked_request(
@@ -125,14 +146,20 @@ class AzureTTSAdapter(TTSBase):
 
 
 class AzureSTTAdapter(STTBase):
-    """Transcribe Azure-compatible WAV or OGG short audio."""
+    """Transcribe Azure-compatible WAV or OGG short audio.
+
+    ``language_code`` is the canonical BCP-47 argument. The historical
+    ``language`` spelling remains a compatibility alias at construction and
+    per call.
+    """
 
     def __init__(
         self,
         api_key: str | None = None,
         region: str | None = None,
         *,
-        language: str = "en-US",
+        language_code: str | None = None,
+        language: str | None = None,
         endpoint: str | None = None,
         timeout_seconds: float = 120,
     ) -> None:
@@ -140,7 +167,14 @@ class AzureSTTAdapter(STTBase):
         require_requests(adapter_name=type(self).__name__, extra="azure-speech")
         self._api_key = _speech_key(api_key, type(self).__name__)
         self._region = _region(region, type(self).__name__)
-        self._language = language
+        self._language_code = resolve_language_code(
+            language_code,
+            language,
+            default="en-US",
+            provider="azure_speech",
+            adapter_name=type(self).__name__,
+            operation="configure",
+        )
         self._endpoint = endpoint or (
             f"https://{self._region}.stt.speech.microsoft.com/"
             "speech/recognition/conversation/cognitiveservices/v1"
@@ -168,8 +202,15 @@ class AzureSTTAdapter(STTBase):
         with adapter_call_scope(self, "transcribe"):
             lifecycle = pop_lifecycle_kwargs(kwargs)
             lifecycle.throw_if_cancelled()
-            language = str(kwargs.get("language", self._language))
-            url = f"{self._endpoint}?{urlencode({'language': language})}"
+            language_code = resolve_language_code(
+                kwargs.pop("language_code", None),
+                kwargs.pop("language", None),
+                default=self._language_code,
+                provider="azure_speech",
+                adapter_name=type(self).__name__,
+                operation="transcribe",
+            )
+            url = f"{self._endpoint}?{urlencode({'language': language_code})}"
             response = checked_request(
                 "POST",
                 url,
@@ -204,4 +245,7 @@ class AzureSTTAdapter(STTBase):
             return str(payload.get("DisplayText", payload.get("Text", "")))
 
     def __repr__(self) -> str:
-        return f"AzureSTTAdapter(region={self._region!r}, language={self._language!r})"
+        return (
+            f"AzureSTTAdapter(region={self._region!r}, "
+            f"language_code={self._language_code!r})"
+        )

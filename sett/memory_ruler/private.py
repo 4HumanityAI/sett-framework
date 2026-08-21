@@ -18,9 +18,10 @@ docs/SETT_Conventions.md for the fuller rationale.
 This is one of the two core memory layers of SETT.
 """
 from __future__ import annotations
-from typing import Any
+
 from copy import deepcopy
 from datetime import datetime, timezone
+from typing import Any
 
 
 class PrivateMemory:

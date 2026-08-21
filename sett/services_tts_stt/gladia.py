@@ -21,11 +21,16 @@ from sett.services_tts_stt._http import (
     require_requests,
     response_json,
 )
+from sett.services_tts_stt._language import resolve_language_code
 from sett.services_tts_stt.base import STTBase
 
 
 class GladiaSTTAdapter(STTBase):
-    """Upload, submit, and poll one Gladia v2 pre-recorded job."""
+    """Upload, submit, and poll one Gladia v2 pre-recorded job.
+
+    Per-call language selection uses ``language_code``; ``language`` remains
+    a compatibility alias.
+    """
 
     def __init__(
         self,
@@ -70,6 +75,14 @@ class GladiaSTTAdapter(STTBase):
         with adapter_call_scope(self, "transcribe"):
             lifecycle = pop_lifecycle_kwargs(kwargs)
             lifecycle.throw_if_cancelled()
+            language_code = resolve_language_code(
+                kwargs.pop("language_code", None),
+                kwargs.pop("language", None),
+                default=None,
+                provider="gladia",
+                adapter_name=type(self).__name__,
+                operation="transcribe",
+            )
             timeout = lifecycle.effective_timeout(self._timeout_seconds)
             headers = {"x-gladia-key": self._api_key}
             filename = str(kwargs.get("filename", "audio.wav"))
@@ -95,9 +108,8 @@ class GladiaSTTAdapter(STTBase):
             except (KeyError, TypeError) as error:
                 raise self._invalid(error, "upload") from error
             request_payload: dict[str, Any] = {"audio_url": audio_url}
-            language = kwargs.get("language")
-            if language:
-                request_payload["language_config"] = {"languages": [str(language)]}
+            if language_code:
+                request_payload["language_config"] = {"languages": [language_code]}
             submit_response = checked_request(
                 "POST",
                 f"{self._base_url}/v2/pre-recorded",

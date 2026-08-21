@@ -26,8 +26,9 @@ registered agent. Three properties define the mechanism:
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 from sett.core_ruler.execution_result import ExecutionStatus
 from sett.exceptions import SETTEthicalFilterRejectedError
@@ -85,7 +86,7 @@ class RejectionOutcome:
     @classmethod
     def from_error(
         cls, domain: str, error: SETTEthicalFilterRejectedError
-    ) -> "RejectionOutcome":
+    ) -> RejectionOutcome:
         """Build one from the rejection the EthicalFilter raised."""
         return cls(
             domain=domain,

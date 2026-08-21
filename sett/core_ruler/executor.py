@@ -65,8 +65,8 @@ from sett.core_ruler.lifecycle import (
     CancellationToken,
     ExecutionControl,
     LifecyclePolicy,
-    current_execution_control,
     cooperative_sleep,
+    current_execution_control,
     lifecycle_scope,
 )
 from sett.core_ruler.resilience import (
@@ -78,8 +78,8 @@ from sett.core_ruler.resilience import (
 from sett.exceptions import (
     SETTCancelledError,
     SETTConfigurationError,
-    SETTEthicalFilterRejectedError,
     SETTError,
+    SETTEthicalFilterRejectedError,
     SETTIdempotencyConflictError,
     SETTTimeoutError,
     SETTValidationError,
@@ -1005,7 +1005,7 @@ class SETTExecutor:
                 # this as a structured ExecutionResult, would misrepresent
                 # what actually happened. `finally` below still runs.
                 raise
-            except BaseException as error:
+            except BaseException as error:  # noqa: BLE001
                 last_error = error
                 classification = classify_error(error, policy)
                 retryable = is_retryable(error, policy)

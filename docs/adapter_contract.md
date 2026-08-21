@@ -2,7 +2,7 @@
 
 Status: current framework contract  
 Introduced: SETT Framework v0.13.0  
-Last reviewed: SETT Framework v0.13.1
+Last reviewed: SETT Framework v0.13.2
 
 This is the canonical, living design document for SETT adapters. Future
 releases update this file in place; Git history and the changelog preserve the
@@ -75,12 +75,14 @@ provider error.
 ## 5. Voice capability model
 
 Voice cloning is a TTS capability, not a new adapter kind. An adapter that can
-operate with a custom provider voice ID declares `voice_cloning=YES`; this is
-not an authorization or policy statement. Consent, licensing, disclosure,
-and persona selection are application concerns and are outside this release.
+operate with caller-supplied voice identity or conditioning declares
+`voice_cloning=YES`; this is not an authorization or policy statement.
+Consent, licensing, disclosure, and persona selection are application
+concerns and are outside this release.
 
-ElevenLabs and Cartesia declare custom voice-ID support. Fixed-voice local
-and community implementations do not.
+ElevenLabs and Cartesia declare custom voice-ID support. Pocket TTS accepts
+audio prompts and exported voice states. Fixed-voice local and community
+implementations do not declare voice cloning.
 
 ## 6. Official adapter roster
 
@@ -97,13 +99,22 @@ New voice adapters:
   `AssemblyAISTTAdapter`, `GladiaSTTAdapter`, `WhisperSTTAdapter`,
   `LocalSTTAdapter`;
 - TTS: `AzureTTSAdapter`, `CartesiaTTSAdapter`, `LocalTTSAdapter`,
-  `KokoroTTSAdapter`, `PiperTTSAdapter`, `EdgeTTSAdapter`.
+  `KokoroTTSAdapter`, `PiperTTSAdapter`, `PocketTTSAdapter`,
+  `EdgeTTSAdapter`.
 
 `LocalTTSAdapter` uses pyttsx3 host voices. `LocalSTTAdapter` uses a lazily
 loaded faster-whisper model. Descriptive aliases are also available as
 `PyttsxTTSAdapter` and `FasterWhisperSTTAdapter`.
 
-The AssemblyAI, Gladia, hosted Whisper, Cartesia, Kokoro, and Piper routes may
+`PocketTTSAdapter` uses Kyutai Pocket TTS through a lazily loaded local model.
+Its SETT path returns complete PCM16 WAV bytes and therefore declares
+streaming as NO, even though the provider also exposes a separate chunked
+API. One adapter instance serializes generation because the upstream model
+does not support concurrent calls. Initial model or voice acquisition may
+need network access; synthesis uses no remote service once those assets are
+cached.
+
+The AssemblyAI, Gladia, hosted Whisper, Cartesia, Kokoro, Piper, and Pocket TTS routes may
 ship without live-account release tests. They must still be implemented,
 instantiable, dependency-isolated, capability-declared, and covered with fake
 provider tests.

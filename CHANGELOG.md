@@ -2,6 +2,132 @@
 
 All notable changes to the SETT framework are documented here.
 
+## [0.13.2] - 2026-08-21
+
+Provider-neutral voice language consistency, audited error boundaries, and
+optional Kyutai Pocket TTS support.
+
+### Fixed
+
+- `LocalSTTAdapter.transcribe()` now accepts `language_code`, matching
+  `GoogleSTTAdapter` and `AssemblyAISTTAdapter`, and reduces a BCP-47 tag to
+  the bare language identifier faster-whisper expects (`es-AR` becomes
+  `es`). The historical `language` name remains a compatibility alias. When
+  both names are present, equivalent primary subtags are accepted and a real
+  conflict raises a structured configuration error instead of silently
+  allowing one spelling to overwrite the other.
+- `AzureTTSAdapter` and `AzureSTTAdapter` now accept `language_code` at
+  construction and per call. A call such as `transcribe(...,
+  language_code="es-AR")` reaches Azure as `language=es-AR` instead of being
+  silently discarded in favor of the configured default.
+- The canonical spelling covers every official STT adapter that offers
+  language selection. Deepgram accepts `language_code` at construction and
+  per call; Gladia and hosted Whisper accept it per call. Whisper reduces
+  BCP-47 tags to the primary language identifier its provider expects.
+- The historical `language` spelling remains a compatibility alias where it
+  already existed. Equivalent effective tags are accepted; conflicts raise a
+  structured `SETTServiceAdapterError` with
+  `adapter.language_arguments_conflict` before provider work.
+- `CartesiaTTSAdapter` joins Azure, Google, and LocalTTS in accepting per-call
+  `language_code`, with the same compatibility and conflict behavior.
+- `LocalTTSAdapter` now normalizes failures raised while creating the engine,
+  reading voice metadata, or applying voice properties. These paths no longer
+  leak provider exceptions outside SETT's error hierarchy.
+- pyttsx3 language matching now understands the control-byte prefix emitted
+  by older eSpeak metadata and underscore-separated locale tags. The
+  `local-tts` extra now requires pyttsx3 2.99 because pyttsx3 2.90 does not
+  expose SAPI5 language metadata on Windows, making honest language selection
+  impossible there.
+- Local TTS and STT paths preserve cancellation and deadline exceptions after
+  provider work instead of translating them into service-adapter failures.
+- `ContextAnalyzer.EMOTIONAL_RISK_MODIFIERS` is now an immutable mapping.
+  One analyzer instance can no longer change the risk score produced by every
+  other instance through shared class state.
+
+### Added
+
+- `LocalTTSAdapter.synthesize()` now accepts an optional `language_code`
+  keyword argument, matching `GoogleTTSAdapter`. Without an explicit
+  `voice_id`, it looks for an installed host voice whose own metadata names
+  the requested language and leaves the current voice untouched when none
+  does. It deliberately does not guess from free-form voice identifiers.
+- `PocketTTSAdapter` adds optional Kyutai Pocket TTS 2.1 support through the
+  existing `TTSBase` contract. It lazily loads a caller-selected language and
+  voice, accepts the conditioning forms supported by Pocket TTS, and returns
+  mono PCM16 WAV bytes. The adapter declares six language families and voice
+  cloning.
+- Pocket TTS generation is exposed honestly as non-streaming because
+  `TTSBase.synthesize()` returns one complete byte payload. The underlying
+  model's streaming API does not change SETT's current contract.
+- One adapter instance serializes model loading, voice conditioning, and
+  generation because Pocket TTS documents its generation methods as not
+  thread-safe. The package and model remain optional; first use can download
+  model weights or catalog voices, while cached assets can synthesize without
+  a remote service.
+
+### Maintenance
+
+- SETT now owns an explicit Ruff 0.16.0 policy in `pyproject.toml`. Repository
+  validation no longer depends on whichever default rule set an installed
+  Ruff version happens to provide. The full tree passes with zero findings.
+- Imports, annotations, unused test values, broad exception assertions,
+  intentional Unicode fixtures, and context-manager structure were cleaned
+  across the repository. Deliberate audit-boundary catches remain in place
+  with narrow inline explanations.
+- Thirteen test modules now use stable, version-independent filenames. Their
+  names describe the contract under test, so future releases update the same
+  files instead of creating parallel version-labelled suites.
+- The adapter deadline test now exercises the adapter and verifies the actual
+  `0.0` effective timeout contract. The environmental-threshold test now pins
+  the real `WARN` to `REJECT` transition instead of leaving its baseline
+  verdict unchecked.
+- LocalSTT now delegates language aliases, conflicts, primary-subtag handling,
+  and lowercase normalization to the shared `_language.py` resolver instead
+  of maintaining a second copy of the same rule.
+- Dedicated post-provider tests now prove that LocalTTS and LocalSTT preserve
+  `SETTCancelledError` and `SETTTimeoutError` rather than translating them into
+  service-adapter failures. Separate fixtures identify legacy eSpeak control
+  bytes and macOS nsss underscore locales independently.
+
+### Documentation
+
+- `README.md` and `docs/getting_started.md` now document source installation
+  instead of presenting SETT as available from PyPI, where it is not published.
+- Removed the unpublished draft Convention #24, which proposed a repository
+  `checksums.txt` practice that was never present in the released v0.13.1
+  archive. This entry records the governance edit without presenting the draft
+  as a released guarantee.
+
+### Compatibility
+
+- No public symbol was removed or renamed. Existing callers using `language`
+  continue to work where that spelling already existed; `language_code` is
+  the canonical spelling for provider-neutral call sites.
+
+### Versioning decision
+
+- `PocketTTSAdapter` is additive public API in the
+  `sett.services_tts_stt` submodule, so Convention #21 would ordinarily place
+  it in a minor release. The maintainer explicitly approved a one-time
+  exception for this still-unpublished v0.13.2 patch: Pocket TTS became known
+  only days before the release was closed and addressed an immediate need for
+  a local CPU TTS option. Keeping the completed work in the same unpublished
+  patch avoids manufacturing two public releases for one review cycle. This
+  decision does not redefine the stable API boundary and does not relax the
+  default rule for future additive public APIs.
+
+### Validation
+
+- 1,038 tests pass, 0 skipped. The 1,003-test v0.13.1 suite remains intact;
+  the 35 release tests cover provider-neutral language selection, aliases and
+  conflicts, BCP-47 normalization, host-voice metadata, normalized failures,
+  post-provider cancellation and timeout preservation, Pocket TTS contracts,
+  lazy loading, WAV encoding, voice-state reuse, serialized concurrent calls,
+  and immutable emotional risk modifiers.
+- SETT keeps zero mandatory dependencies. `pocket-tts>=2.1.0,<3` is available
+  through the `pocket-tts` extra and is included only in the opt-in `all`
+  extra.
+
 ## [0.13.1] - 2026-08-19
 
 Fail-closed routing and embedding-overhead patch, plus release-audit cleanup.
@@ -469,7 +595,7 @@ These were wrong in v0.11.0 and earlier.
 - `SETTOrchestrator.process_traced()` and immutable `TracedResult` for callers
   that need the result and trace identity together.
 - Stable generated `Action.action_id` for causal effect correlation.
-- `tests/test_execution_context_v011.py`, covering context isolation,
+- `tests/test_execution_context.py`, covering context isolation,
   immutability, causal paths, privacy, compatibility, pipelines, broadcasts,
   actions, failures, and fail-closed exporter behavior.
 - `docs/execution_context.md` and `MIGRATION_v0.11.md`.

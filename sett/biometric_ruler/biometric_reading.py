@@ -7,6 +7,7 @@ risk_ruler: a typed value object that ethics_ruler consumes, not a
 component that decides anything by itself.
 """
 from __future__ import annotations
+
 import math
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -91,15 +92,13 @@ class BiometricReading:
             or self.heart_rate_bpm < self.HEART_RATE_MIN_BPM
         ):
             return True
-        if self.temperature_celsius is not None and (
+        return self.temperature_celsius is not None and (
             self.temperature_celsius > self.TEMPERATURE_MAX_C
             or self.temperature_celsius < self.TEMPERATURE_MIN_C
-        ):
-            return True
-        return False
+        )
 
     @classmethod
-    def from_context(cls, context: dict[str, Any]) -> "BiometricReading":
+    def from_context(cls, context: dict[str, Any]) -> BiometricReading:
         """
         Parse a BiometricReading out of an action's context dict.
 

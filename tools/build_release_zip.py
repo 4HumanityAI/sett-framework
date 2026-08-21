@@ -77,11 +77,9 @@ def _is_excluded(path: Path, root: Path) -> bool:
         return True
     if path.name in EXCLUDED_FILE_NAMES:
         return True
-    if path.parent == root and any(
+    return path.parent == root and any(
         path.match(pattern) for pattern in EXCLUDED_ROOT_GLOBS
-    ):
-        return True
-    return False
+    )
 
 
 def included_files(root: Path) -> list[Path]:

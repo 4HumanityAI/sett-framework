@@ -41,13 +41,14 @@ now part of the contract instead of something every subclass has to
 reinvent by breaking it.
 """
 from __future__ import annotations
+
+import logging
 from abc import abstractmethod
 from typing import Any
-import logging
 
 from sett.core_ruler.expert import SETTExpert
-from sett.services_llm.base import LLMBase
 from sett.exceptions import SETTLLMAdapterError
+from sett.services_llm.base import LLMBase
 
 logger = logging.getLogger(__name__)
 
@@ -121,7 +122,7 @@ class PhrasingExpert(SETTExpert):
         "Never state anything as fact that wasn't given to you."
     )
 
-    def __init__(self, name: str, llm: "LLMBase | None" = None) -> None:
+    def __init__(self, name: str, llm: LLMBase | None = None) -> None:
         """
         Args:
             name: Unique name within the parent agent (same as any

@@ -17,12 +17,11 @@ Run with:
     PYTHONPATH=. python examples/multi_agent.py
 """
 from sett import (
-    SETTOrchestrator,
+    EthicalFilter,
     SETTAgent,
     SETTExpert,
-    EthicalFilter,
+    SETTOrchestrator,
 )
-
 
 # ── HEALTH AGENT ────────────────────────────────────────────────────────────
 
@@ -113,10 +112,10 @@ class AppointmentExpert(SETTExpert):
     """Checks for upcoming appointments from the user's schedule."""
 
     # In a real system, this would query a calendar service
-    MOCK_APPOINTMENTS = [
+    MOCK_APPOINTMENTS = (
         {"time": "10:00", "description": "Doctor appointment: Dr. García"},
         {"time": "15:30", "description": "Medication reminder: take blood pressure pill"},
-    ]
+    )
 
     def resolve(self, context):
         if self._private_memory:

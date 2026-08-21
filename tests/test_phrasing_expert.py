@@ -5,9 +5,10 @@ Tests for the base class that formalizes the "LLM only phrases,
 never invents" pattern found independently twice in an early prototype.
 """
 import pytest
+
 from sett import PhrasingExpert
-from sett.services_llm.base import LLMBase
 from sett.exceptions import SETTLLMAdapterError
+from sett.services_llm.base import LLMBase
 
 
 class GreetingLikeExpert(PhrasingExpert):
@@ -170,7 +171,7 @@ class TestPhrasingExpertWithAgent:
                 self._publish_to_universal(result)
                 return result
 
-        from sett import SETTOrchestrator, EthicalFilter
+        from sett import EthicalFilter, SETTOrchestrator
         o = SETTOrchestrator(ethical_filter=EthicalFilter())
         o.register_agent(MyAgent(llm=FakeLLM()))
         result = o.process({"hour": 8}, domain="greeter_test")
@@ -196,7 +197,7 @@ class TestPhrasingExpertWithAgent:
             def fallback_text(self, facts, context):
                 return "ok"
 
-        from sett import SETTAgent, SETTOrchestrator, EthicalFilter
+        from sett import EthicalFilter, SETTAgent, SETTOrchestrator
 
         class MyAgent(SETTAgent):
             def __init__(self):

@@ -14,8 +14,7 @@ Two guarantees, verified separately:
 
 import pytest
 
-from sett import EthicalFilter, SETTEthicalFilterRejectedError
-from sett import EthicalRuleset
+from sett import EthicalFilter, EthicalRuleset, SETTEthicalFilterRejectedError
 
 
 def _reject(ruleset=None, action="blocked_action", **eval_kwargs):

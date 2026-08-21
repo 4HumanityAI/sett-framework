@@ -20,11 +20,16 @@ from sett.services_tts_stt._http import (
     require_requests,
     response_json,
 )
+from sett.services_tts_stt._language import resolve_language_code
 from sett.services_tts_stt.base import STTBase
 
 
 class WhisperSTTAdapter(STTBase):
-    """Transcribe audio with the hosted OpenAI audio transcription API."""
+    """Transcribe audio with the hosted OpenAI audio transcription API.
+
+    ``language_code`` accepts a BCP-47 tag and forwards its primary subtag,
+    which is the form the provider expects. ``language`` remains an alias.
+    """
 
     def __init__(
         self,
@@ -77,9 +82,17 @@ class WhisperSTTAdapter(STTBase):
             filename = str(kwargs.get("filename", "audio.wav"))
             content_type = str(kwargs.get("content_type", "audio/wav"))
             data = {"model": str(kwargs.get("model", self._model))}
-            language = kwargs.get("language")
-            if language:
-                data["language"] = str(language)
+            language_code = resolve_language_code(
+                kwargs.pop("language_code", None),
+                kwargs.pop("language", None),
+                default=None,
+                provider="openai",
+                adapter_name=type(self).__name__,
+                operation="transcribe",
+                primary_only=True,
+            )
+            if language_code:
+                data["language"] = language_code
             response = checked_request(
                 "POST",
                 self._endpoint,

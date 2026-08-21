@@ -1194,7 +1194,7 @@ class MyTTSAdapter(TTSBase):
 
 | Method | Returns | Description |
 |---|---|---|
-| `synthesize(text, **kwargs)` | `bytes` | Converts text to speech audio, encoded as `audio_format`. `**kwargs` are provider-specific (voice, language, stability, etc.). |
+| `synthesize(text, **kwargs)` | `bytes` | Converts text to speech audio, encoded as `audio_format`. Official adapters with per-call BCP-47 selection use `language_code`; voice, stability, and other options remain provider-specific. |
 | `audio_format` *(property)* | `str` | The audio encoding this adapter produces (e.g. `"mp3"`, `"wav"`). |
 
 Deliberately does not play audio, write files, or touch any UI: that is an application-layer concern. Returning raw bytes keeps the adapter a pure function, testable without a speaker, a UI, or a filesystem.
@@ -1224,7 +1224,7 @@ class MySTTAdapter(STTBase):
 
 | Method | Returns | Description |
 |---|---|---|
-| `transcribe(audio, **kwargs)` | `str` | Converts speech audio to text. `**kwargs` are provider-specific (language_code, etc.). Returns an empty string if nothing was recognized: adapters raise `SETTServiceAdapterError` only for actual failures (network, auth, malformed audio), never for silence. |
+| `transcribe(audio, **kwargs)` | `str` | Converts speech audio to text. All official adapters with language selection accept the provider-neutral `language_code` spelling; other options remain provider-specific. Returns an empty string if nothing was recognized: adapters raise `SETTServiceAdapterError` only for actual failures (network, auth, malformed audio), never for silence. |
 
 Deliberately does not own a microphone, a listening loop, or any concurrency guard: that orchestration belongs in the application/Expert layer that calls this adapter, not inside it (see the Concurrency section below).
 

@@ -16,22 +16,22 @@ Key contracts:
   - Privacy: RiskProfile never leaks to universal memory
 """
 import pytest
+
 from sett import (
+    EnvironmentalContext,
     EthicalFilter,
     EthicalRuleset,
-    EthicalRule,
-    HarmCategory,
+    FilterVerdict,
     RiskLevel,
     RiskProfile,
-    EnvironmentalContext,
     SETTEthicalFilterRejectedError,
     SETTMemoryAccessDeniedError,
     SETTValidationError,
-    default_ruleset,
-    FilterVerdict,
 )
-from sett.ethics_ruler.ethic_kernel.context_analyzer import ContextAnalyzer
-
+from sett.ethics_ruler.ethic_kernel.context_analyzer import (
+    ContextAnalyzer,
+    canonicalize_for_keyword_match,
+)
 
 # ── RiskProfile tests ────────────────────────────────────────────────────────
 
@@ -329,15 +329,16 @@ class TestEthicalFilter:
     def test_environmental_context_tightens_thresholds(self):
         """
         With a high environmental risk level, the filter should reject
-        actions that would be allowed under normal conditions.
+        an action that only warns under normal conditions.
         """
-        # Under normal conditions, this action is allowed (score ~1.5)
+        # Under normal conditions, the action reaches the warning threshold.
         f_normal = EthicalFilter()
         verdict_normal = f_normal.evaluate(
             action="send_message",
             context={},
             emotional_state="distressed",
         )
+        assert verdict_normal is FilterVerdict.WARN
         # Under a LEVEL_5 environment, same action with same state should be rejected
         f_strict = EthicalFilter()
         env_ctx = EnvironmentalContext(
@@ -453,6 +454,20 @@ class TestEthicalFilter:
 
 class TestThreeLayerIntegration:
 
+    def test_emotional_risk_modifiers_are_immutable_across_instances(self):
+        first = ContextAnalyzer()
+        second = ContextAnalyzer()
+        baseline = second.analyze(
+            "say hello", {}, emotional_state="crisis"
+        ).risk_score
+
+        with pytest.raises(TypeError):
+            first.EMOTIONAL_RISK_MODIFIERS["crisis"] = 0.0
+
+        assert second.analyze(
+            "say hello", {}, emotional_state="crisis"
+        ).risk_score == baseline
+
     def test_all_three_layers_combine_correctly(self):
         """
         Verify that all three layers contribute to the final score
@@ -528,7 +543,7 @@ class TestThreeLayerIntegration:
         A RiskProfile must NEVER appear in UniversalMemory.
         Only EnvironmentalContext (anonymized) is shared.
         """
-        from sett import SETTOrchestrator, SETTAgent, SETTExpert
+        from sett import SETTAgent, SETTExpert, SETTOrchestrator
 
         class HealthExpert(SETTExpert):
             def resolve(self, context):
@@ -583,7 +598,7 @@ class TestThreeLayerIntegration:
         adversarially, could publish a raw RiskProfile instance and it
         would be accepted and stored like any other value.
         """
-        from sett import SETTOrchestrator, SETTAgent
+        from sett import SETTAgent, SETTOrchestrator
 
         class CarelessAgent(SETTAgent):
             def __init__(self):
@@ -619,7 +634,7 @@ class TestThreeLayerIntegration:
         mutated something it was given during evaluation silently tainted
         what later got stored, with no signal it had happened.
         """
-        from sett import SETTOrchestrator, SETTAgent
+        from sett import SETTAgent, SETTOrchestrator
         from sett.ethics_ruler.ethic_kernel.context_analyzer import (
             ContextAnalyzer,
         )
@@ -668,7 +683,7 @@ class TestThreeLayerIntegration:
         leak as the object itself, since RiskProfile.to_dict() produces exactly
         this shape.
         """
-        from sett import SETTOrchestrator, SETTAgent
+        from sett import SETTAgent, SETTOrchestrator
 
         class SerializingAgent(SETTAgent):
             def __init__(self):
@@ -692,12 +707,6 @@ class TestThreeLayerIntegration:
 # AUD4-ROB-01: Unicode canonicalization of the Layer 1 keyword matcher
 # ─────────────────────────────────────────────────────────────────────
 
-from sett.ethics_ruler.ethic_kernel.context_analyzer import (  # noqa: E402
-    ContextAnalyzer,
-    canonicalize_for_keyword_match,
-)
-
-
 class TestKeywordCanonicalizationPolicy:
     """
     The policy, stated as tests: invisible characters and compatibility
@@ -708,11 +717,11 @@ class TestKeywordCanonicalizationPolicy:
     @pytest.mark.parametrize(
         "written, canonical",
         [
-            ("ha​rm", "harm"),          # zero-width space
-            ("ha‌rm", "harm"),          # zero-width non-joiner
-            ("emer‍gency", "emergency"),  # zero-width joiner
-            ("de­lete", "delete"),      # soft hyphen
-            ("‮harm‬", "harm"),    # bidi overrides
+            ("ha\u200brm", "harm"),          # zero-width space
+            ("ha\u200crm", "harm"),          # zero-width non-joiner
+            ("emer\u200dgency", "emergency"),  # zero-width joiner
+            ("de\u00adlete", "delete"),      # soft hyphen
+            ("\u202eharm\u202c", "harm"),    # bidi overrides
             ("ｄｅｌｅｔｅ", "delete"),  # fullwidth
             ("DELETE", "delete"),
             ("Emergency", "emergency"),
@@ -743,10 +752,10 @@ class TestLayer1ScoresInvisibleSpellingsTheSameWay:
     @pytest.mark.parametrize(
         "obfuscated, plain",
         [
-            ("ha​rm the user", "harm the user"),
-            ("emer​gency call", "emergency call"),
-            ("de­lete everything", "delete everything"),
-            ("s​end the file", "send the file"),
+            ("ha\u200brm the user", "harm the user"),
+            ("emer\u200bgency call", "emergency call"),
+            ("de\u00adlete everything", "delete everything"),
+            ("s\u200bend the file", "send the file"),
             ("ｓｅｎｄ the file", "send the file"),
         ],
     )
@@ -755,20 +764,20 @@ class TestLayer1ScoresInvisibleSpellingsTheSameWay:
 
     @pytest.mark.parametrize("field", ["proposed_action", "action_type"])
     def test_structured_fields_are_canonicalized_too(self, field):
-        obfuscated = self._score("memory write", {field: "de­lete_all"})
+        obfuscated = self._score("memory write", {field: "de\u00adlete_all"})
         plain = self._score("memory write", {field: "delete_all"})
         assert obfuscated == plain
         assert plain > self._score("memory write", {field: "read_one"})
 
     def test_consequences_are_listed_for_invisible_spellings_too(self):
-        consequences = self.ANALYZER.analyze("emer​gency call", {}).consequences
+        consequences = self.ANALYZER.analyze("emer\u200bgency call", {}).consequences
         assert any("Emergency services" in c for c in consequences)
 
     def test_emotional_state_survives_an_invisible_character(self):
         obfuscated = self._score("say hello", {})
         analyzer = self.ANALYZER
         with_zwsp = analyzer.analyze(
-            "say hello", {}, emotional_state="cri​sis"
+            "say hello", {}, emotional_state="cri\u200bsis"
         ).risk_score
         with_plain = analyzer.analyze(
             "say hello", {}, emotional_state="crisis"

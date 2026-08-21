@@ -28,7 +28,6 @@ from sett import (
 )
 from sett.services_llm.base import LLMBase
 
-
 # ── Point 2: SETTOrchestrator.verify_ethical_audit_log() ────────────────────
 
 def test_orchestrator_verify_ethical_audit_log_delegates_to_filter():
@@ -53,7 +52,7 @@ def test_orchestrator_verify_ethical_audit_log_reflects_tampering():
 
     # Reach past the public getter to corrupt the filter's own internal
     # log, the same way test_public_logs_are_defensive_and_chains_verify
-    # (test_hardening_v080.py) tampers with it: get_audit_log() itself
+    # (test_hardening.py) tampers with it: get_audit_log() itself
     # returns a defensive copy, so this mutates the real internal state
     # directly, not a snapshot.
     ethical_filter._audit_log[0]["verdict"] = "tampered"

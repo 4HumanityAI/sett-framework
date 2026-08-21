@@ -10,16 +10,17 @@ services_llm/ollama.py's docstring for setup steps.
 """
 import json
 import urllib.error
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock
 
 from sett import PhrasingExpert
-from sett.services_llm.ollama import OllamaAdapter
 from sett.exceptions import (
     SETTCancelledError,
     SETTLLMAdapterError,
     SETTTimeoutError,
 )
+from sett.services_llm.ollama import OllamaAdapter
 
 
 def _fake_response(payload: dict) -> MagicMock:
@@ -184,7 +185,7 @@ class TestOllamaAdapterErrorHandling:
                 assert False, "should have raised"
             except SETTLLMAdapterError:
                 pass
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 pytest.fail(f"Leaked non-SETT exception type: {type(e)}")
 
 

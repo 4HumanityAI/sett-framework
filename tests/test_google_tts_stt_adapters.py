@@ -20,11 +20,11 @@ What IS tested here without the real SDK:
     the same `from google.cloud import texttospeech` lazy import.
 """
 import sys
-import pytest
 from unittest.mock import MagicMock, patch
 
-from sett.exceptions import SETTServiceAdapterError
+import pytest
 
+from sett.exceptions import SETTServiceAdapterError
 
 # ---------------------------------------------------------------------------
 # "Package not installed": deterministic regardless of the environment.
@@ -123,7 +123,7 @@ def fake_google_credentials(monkeypatch):
 class TestGoogleTTSAdapterSynthesize:
 
     def test_synthesize_returns_audio_bytes(self, fake_google_credentials):
-        fake_module, client = _fake_texttospeech_module()
+        fake_module, _client = _fake_texttospeech_module()
         with patch.dict(sys.modules, _fake_google_cloud_sys_modules("texttospeech", fake_module)):
             from sett.services_tts_stt.google import GoogleTTSAdapter
             adapter = GoogleTTSAdapter(language_code="es-AR")
@@ -137,7 +137,7 @@ class TestGoogleTTSAdapterSynthesize:
             adapter = GoogleTTSAdapter(language_code="es-AR")
             adapter.synthesize("hola")
 
-            _, call_kwargs = client.synthesize_speech.call_args
+            _, _call_kwargs = client.synthesize_speech.call_args
             fake_module.VoiceSelectionParams.assert_called_with(
                 language_code="es-AR", ssml_gender="NEUTRAL"
             )

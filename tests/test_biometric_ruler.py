@@ -8,6 +8,8 @@ test_ethics.py continues to cover the integration (that
 _detect_human_at_risk still produces the same human_at_risk verdict
 end to end).
 """
+from dataclasses import FrozenInstanceError
+
 import pytest
 
 from sett.biometric_ruler.biometric_reading import BiometricReading
@@ -114,5 +116,5 @@ class TestSerialization:
 
     def test_is_frozen(self):
         reading = BiometricReading(heart_rate_bpm=72)
-        with pytest.raises(Exception):
+        with pytest.raises(FrozenInstanceError):
             reading.heart_rate_bpm = 200

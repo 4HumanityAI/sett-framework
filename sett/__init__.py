@@ -32,68 +32,16 @@ if not any(
 ):
     _sett_logger.addHandler(_logging.NullHandler())
 
-__version__ = "0.13.1"
+__version__ = "0.13.2"
 __author__ = "Eduardo Daniel Viñales"
 __license__ = "MIT"
 
 # Core building blocks
-from sett.core_ruler.orchestrator import SETTOrchestrator
-from sett.core_ruler.agent import SETTAgent
-from sett.core_ruler.expert import SETTExpert
-from sett.core_ruler.phrasing_expert import PhrasingExpert
-from sett.core_ruler.action import Action
-from sett.core_ruler.executor import SETTExecutor
-from sett.core_ruler.execution_context import (
-    ExecutionContext,
-    TracedResult,
-    current_execution_context,
-)
 from sett.audit_ruler.trace import TraceEvent, TraceRecorder
-from sett.core_ruler.stub_agent import StubDomainAgent
-from sett.core_ruler.pipeline import (
-    PipelineStep,
-    PipelineResult,
-    StageOutcome,
-    RejectionOutcome,
-    SkipCause,
-)
 
-# Lifecycle: cancellation, deadlines and structured outcomes
-from sett.core_ruler.lifecycle import (
-    CancellationSnapshot,
-    CancellationSource,
-    CancellationToken,
-    Deadline,
-    ExecutionControl,
-    ExecutionControlRegistry,
-    LifecyclePolicy,
-    current_execution_control,
-    lifecycle_scope,
-)
-from sett.core_ruler.execution_result import (
-    ExecutionResult,
-    ExecutionState,
-    ExecutionStatus,
-)
-from sett.core_ruler.executor import HandlerContext, current_handler_context
-from sett.core_ruler.idempotency import (
-    ActionAttempt,
-    IdempotencyRecord,
-    IdempotencyReservation,
-    IdempotencyStatus,
-    IdempotencyStore,
-    InMemoryIdempotencyStore,
-    action_fingerprint,
-)
-from sett.core_ruler.resilience import (
-    CircuitBreaker,
-    CircuitBreakerPolicy,
-    CircuitState,
-    ErrorClass,
-    RetryPolicy,
-    classify_error,
-    execute_with_resilience,
-)
+# Biometric system
+from sett.biometric_ruler.biometric_reading import BiometricReading
+from sett.core_ruler.action import Action
 from sett.core_ruler.adapter import (
     AdapterCapabilities,
     AdapterErrorKind,
@@ -110,62 +58,122 @@ from sett.core_ruler.adapter import (
     SelectionPolicy,
     select_adapter,
 )
+from sett.core_ruler.agent import SETTAgent
+from sett.core_ruler.execution_context import (
+    ExecutionContext,
+    TracedResult,
+    current_execution_context,
+)
+from sett.core_ruler.execution_result import (
+    ExecutionResult,
+    ExecutionState,
+    ExecutionStatus,
+)
+from sett.core_ruler.executor import (
+    HandlerContext,
+    SETTExecutor,
+    current_handler_context,
+)
+from sett.core_ruler.expert import SETTExpert
+from sett.core_ruler.idempotency import (
+    ActionAttempt,
+    IdempotencyRecord,
+    IdempotencyReservation,
+    IdempotencyStatus,
+    IdempotencyStore,
+    InMemoryIdempotencyStore,
+    action_fingerprint,
+)
 
-# Memory layers
-from sett.memory_ruler.universal import UniversalMemory
-from sett.memory_ruler.private import PrivateMemory
+# Lifecycle: cancellation, deadlines and structured outcomes
+from sett.core_ruler.lifecycle import (
+    CancellationSnapshot,
+    CancellationSource,
+    CancellationToken,
+    Deadline,
+    ExecutionControl,
+    ExecutionControlRegistry,
+    LifecyclePolicy,
+    current_execution_control,
+    lifecycle_scope,
+)
+from sett.core_ruler.orchestrator import SETTOrchestrator
+from sett.core_ruler.phrasing_expert import PhrasingExpert
+from sett.core_ruler.pipeline import (
+    PipelineResult,
+    PipelineStep,
+    RejectionOutcome,
+    SkipCause,
+    StageOutcome,
+)
+from sett.core_ruler.resilience import (
+    CircuitBreaker,
+    CircuitBreakerPolicy,
+    CircuitState,
+    ErrorClass,
+    RetryPolicy,
+    classify_error,
+    execute_with_resilience,
+)
+from sett.core_ruler.stub_agent import StubDomainAgent
+from sett.ethics_ruler.ethic_kernel.context_analyzer import (
+    ContextAnalysis,
+    ContextAnalyzer,
+    SafetyAssessment,
+)
 
 # Ethics governance layer
 from sett.ethics_ruler.ethic_kernel.filter import EthicalFilter, FilterVerdict
 from sett.ethics_ruler.ethic_kernel.rules import (
-    EthicalRuleset,
     EthicalRule,
+    EthicalRuleset,
     HarmCategory,
     default_ruleset,
 )
-from sett.ethics_ruler.ethic_kernel.context_analyzer import (
-    ContextAnalyzer,
-    ContextAnalysis,
-    SafetyAssessment,
+
+# Exceptions
+from sett.exceptions import (
+    SETTAdapterError,
+    SETTAgentNotFoundError,
+    SETTCancelledError,
+    SETTConfigurationError,
+    SETTDependencyError,
+    SETTError,
+    SETTEthicalFilterRejectedError,
+    SETTEthicalFilterWarningError,
+    SETTExpertNotFoundError,
+    SETTIdempotencyConflictError,
+    SETTLLMAdapterError,
+    SETTMemoryAccessDeniedError,
+    SETTServiceAdapterError,
+    SETTTimeoutError,
+    SETTValidationError,
 )
+from sett.memory_ruler.private import PrivateMemory
+
+# Memory layers
+from sett.memory_ruler.universal import UniversalMemory
+from sett.risk_ruler.environmental_context import EnvironmentalContext
 
 # Risk system: three-layer hybrid evaluation
 from sett.risk_ruler.risk_level import RiskLevel
 from sett.risk_ruler.risk_profile import RiskProfile
-from sett.risk_ruler.environmental_context import EnvironmentalContext
-
-# Biometric system
-from sett.biometric_ruler.biometric_reading import BiometricReading
 
 # LLM adapters
 from sett.services_llm.base import LLMBase
 
-# TTS/STT adapters
-from sett.services_tts_stt.base import TTSBase, STTBase
-
 # Sentiment adapters
-from sett.services_sentiment.base import SentimentBase, SentimentResult, SentenceSentiment
-
-# Exceptions
-from sett.exceptions import (
-    SETTError,
-    SETTAdapterError,
-    SETTEthicalFilterRejectedError,
-    SETTEthicalFilterWarningError,
-    SETTMemoryAccessDeniedError,
-    SETTAgentNotFoundError,
-    SETTExpertNotFoundError,
-    SETTLLMAdapterError,
-    SETTServiceAdapterError,
-    SETTConfigurationError,
-    SETTValidationError,
-    SETTCancelledError,
-    SETTTimeoutError,
-    SETTDependencyError,
-    SETTIdempotencyConflictError,
+from sett.services_sentiment.base import (
+    SentenceSentiment,
+    SentimentBase,
+    SentimentResult,
 )
 
-__all__ = [
+# TTS/STT adapters
+from sett.services_tts_stt.base import STTBase, TTSBase
+
+# Public symbols are grouped by subsystem to keep the API reviewable.
+__all__ = [  # noqa: RUF022
     # Core
     "SETTOrchestrator",
     "SETTAgent",

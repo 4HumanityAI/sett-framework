@@ -7,8 +7,12 @@ two ContextAnalyzers" conflict found while building two independent
 prototype applications on top of the same framework).
 """
 import pytest
-from sett import EthicalFilter, EthicalRuleset
-from sett.ethics_ruler.ethic_kernel.context_analyzer import ContextAnalyzer, ContextAnalysis
+
+from sett import EthicalFilter, SETTEthicalFilterRejectedError
+from sett.ethics_ruler.ethic_kernel.context_analyzer import (
+    ContextAnalysis,
+    ContextAnalyzer,
+)
 
 
 class AlwaysZeroAnalyzer(ContextAnalyzer):
@@ -45,7 +49,7 @@ class TestRegisterAnalyzer:
         filt = EthicalFilter()
         filt.register_analyzer("confirm_purchase", AlwaysMaxAnalyzer())
 
-        with pytest.raises(Exception):  # SETTEthicalFilterRejectedError
+        with pytest.raises(SETTEthicalFilterRejectedError):
             filt.evaluate(action="confirm_purchase", context={})
 
     def test_other_action_types_unaffected_by_registration(self):
@@ -62,7 +66,7 @@ class TestRegisterAnalyzer:
         filt.register_analyzer("purchase", AlwaysMaxAnalyzer())
         filt.register_analyzer("routine_check", AlwaysZeroAnalyzer())
 
-        with pytest.raises(Exception):
+        with pytest.raises(SETTEthicalFilterRejectedError):
             filt.evaluate(action="purchase", context={})
 
         verdict = filt.evaluate(action="routine_check", context={})
@@ -85,7 +89,7 @@ class TestRegisterAnalyzer:
         """The constructor's context_analyzer remains the fallback for
         any action_type without a specific registration."""
         filt = EthicalFilter(context_analyzer=AlwaysMaxAnalyzer())
-        with pytest.raises(Exception):
+        with pytest.raises(SETTEthicalFilterRejectedError):
             filt.evaluate(action="anything", context={})
 
     def test_registered_analyzer_receives_full_context(self):

@@ -16,19 +16,19 @@ Key contracts tested:
     leaks into the Executor's audit log or any persisted state
 """
 import pytest
+
 from sett import (
-    SETTOrchestrator,
-    SETTAgent,
-    SETTExpert,
-    SETTExecutor,
+    Action,
     EthicalFilter,
     EthicalRuleset,
     RiskProfile,
-    Action,
-    SETTEthicalFilterRejectedError,
+    SETTAgent,
     SETTConfigurationError,
+    SETTEthicalFilterRejectedError,
+    SETTExecutor,
+    SETTExpert,
+    SETTOrchestrator,
 )
-
 
 # ── Test doubles ─────────────────────────────────────────────────────────────
 

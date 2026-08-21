@@ -21,17 +21,23 @@ from sett.services_tts_stt._http import (
     require_requests,
     response_json,
 )
+from sett.services_tts_stt._language import resolve_language_code
 from sett.services_tts_stt.base import STTBase
 
 
 class DeepgramSTTAdapter(STTBase):
-    """Transcribe complete audio payloads through Deepgram's REST API."""
+    """Transcribe complete audio payloads through Deepgram's REST API.
+
+    ``language_code`` is canonical; ``language`` remains a compatibility
+    alias at construction and per call.
+    """
 
     def __init__(
         self,
         api_key: str | None = None,
         *,
         model: str = "nova-3",
+        language_code: str | None = None,
         language: str | None = None,
         endpoint: str = "https://api.deepgram.com/v1/listen",
         timeout_seconds: float = 120,
@@ -45,7 +51,14 @@ class DeepgramSTTAdapter(STTBase):
             adapter_name=type(self).__name__,
         )
         self._model = model.strip() or "nova-3"
-        self._language = language.strip() if language else None
+        self._language_code = resolve_language_code(
+            language_code,
+            language,
+            default=None,
+            provider="deepgram",
+            adapter_name=type(self).__name__,
+            operation="configure",
+        )
         self._endpoint = endpoint.rstrip("?")
         self._timeout_seconds = validate_duration_seconds(
             timeout_seconds, name="timeout_seconds"
@@ -75,9 +88,16 @@ class DeepgramSTTAdapter(STTBase):
                 "model": str(kwargs.get("model", self._model)),
                 "smart_format": str(bool(kwargs.get("smart_format", True))).lower(),
             }
-            language = kwargs.get("language", self._language)
-            if language:
-                query["language"] = str(language)
+            language_code = resolve_language_code(
+                kwargs.pop("language_code", None),
+                kwargs.pop("language", None),
+                default=self._language_code,
+                provider="deepgram",
+                adapter_name=type(self).__name__,
+                operation="transcribe",
+            )
+            if language_code:
+                query["language"] = language_code
             content_type = str(kwargs.get("content_type", "audio/wav"))
             response = checked_request(
                 "POST",

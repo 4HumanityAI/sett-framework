@@ -9,11 +9,13 @@ injection (not mocking an installed SDK) is the testing strategy here,
 and why a plain MagicMock parent module is not enough on its own.
 """
 import sys
-import pytest
+from dataclasses import FrozenInstanceError
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from sett.exceptions import SETTServiceAdapterError
-from sett.services_sentiment.base import SentimentResult, SentenceSentiment
+from sett.services_sentiment.base import SentenceSentiment, SentimentResult
 
 
 def _fake_google_cloud_sys_modules(submodule_name: str, submodule_mock: MagicMock) -> dict:
@@ -232,10 +234,10 @@ class TestSentimentResultAndSentenceSentiment:
 
     def test_sentiment_result_is_frozen(self):
         result = SentimentResult(score=0.5, magnitude=0.5)
-        with pytest.raises(Exception):
+        with pytest.raises(FrozenInstanceError):
             result.score = 0.9
 
     def test_sentence_sentiment_is_frozen(self):
         s = SentenceSentiment(text="hola", score=0.1)
-        with pytest.raises(Exception):
+        with pytest.raises(FrozenInstanceError):
             s.score = 0.9

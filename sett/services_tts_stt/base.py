@@ -93,8 +93,9 @@ class TTSBase(ABC):
 
         Args:
             text: The text to synthesize.
-            **kwargs: Provider-specific parameters (voice, language,
-                stability, etc.)
+            **kwargs: Adapter parameters. Official adapters that expose
+                per-call BCP-47 selection use ``language_code``; other
+                options such as voice and stability remain provider-specific.
 
         Returns:
             Raw audio bytes, encoded as `audio_format`.
@@ -143,7 +144,9 @@ class STTBase(ABC):
             audio: Raw audio bytes (encoding expected by the specific
                 adapter: check its docstring, e.g. LINEAR16 WAV for
                 GoogleSTTAdapter).
-            **kwargs: Provider-specific parameters (language_code, etc.)
+            **kwargs: Adapter parameters. Official adapters that expose
+                language selection use the provider-neutral ``language_code``
+                spelling; other options remain provider-specific.
 
         Returns:
             The transcribed text. Empty string if nothing was

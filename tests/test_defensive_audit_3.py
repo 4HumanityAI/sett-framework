@@ -434,7 +434,7 @@ def test_the_digest_still_correlates_events_for_one_operation():
 
 
 def test_the_provider_error_helper_is_named_for_bounding_not_redaction():
-    import sett.exceptions as exceptions
+    from sett import exceptions
 
     assert hasattr(exceptions, "bound_provider_error_message")
     assert not hasattr(exceptions, "sanitize_provider_error_message"), (

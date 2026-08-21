@@ -27,15 +27,14 @@ Run with:
     PYTHONPATH=. python examples/with_ethics.py
 """
 from sett import (
-    SETTOrchestrator,
-    SETTAgent,
-    SETTExpert,
     EthicalFilter,
+    SETTAgent,
     SETTEthicalFilterRejectedError,
+    SETTExpert,
+    SETTOrchestrator,
     default_ruleset,
 )
 from sett.ethics_ruler.ethic_kernel.context_analyzer import ContextAnalyzer
-
 
 # ── A CUSTOM CONTEXT ANALYZER THAT USES EMOTIONAL STATE ─────────────────────
 
@@ -145,7 +144,7 @@ def run_scenario(title, orchestrator, domain, context, emotional_state="unknown"
         )
         print(f"  ✓ Action completed: {result}")
     except SETTEthicalFilterRejectedError as e:
-        print(f"  ✗ Action BLOCKED by EthicalFilter")
+        print("  ✗ Action BLOCKED by EthicalFilter")
         print(f"    Reason: {str(e)[:160]}...")
 
 

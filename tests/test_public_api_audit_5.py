@@ -13,7 +13,7 @@ API-03  Transitioning an unknown identity is a silent no-op in the
         intended contract, it was simply never written down; these tests
         fix the current behaviour so a later change has to be deliberate.
 
-The provider doubles follow ``test_llm_cloud_adapters_v012.py``: none of
+The provider doubles follow ``test_llm_cloud_adapters.py``: none of
 ``openai``, ``anthropic`` or ``google-generativeai`` is installed here, so
 each is stood up as a module in ``sys.modules``. What that proves is what
 SETT controls, namely the translation at the boundary, not that the real SDK
