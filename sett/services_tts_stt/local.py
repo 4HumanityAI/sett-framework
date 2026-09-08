@@ -28,7 +28,8 @@ from sett.services_tts_stt.base import STTBase, TTSBase
 def _dependency_error(adapter_name: str, dependency: str, extra: str) -> SETTServiceAdapterError:
     return SETTServiceAdapterError(
         f"The '{dependency}' package is required to use {adapter_name}. "
-        f"Install it with: pip install sett-framework[{extra}]",
+        "SETT installs from source; from your checkout run: "
+        f"pip install -e \".[{extra}]\"",
         kind=AdapterErrorKind.CONFIGURATION,
         adapter_name=adapter_name,
         reason_code="adapter.dependency_missing",

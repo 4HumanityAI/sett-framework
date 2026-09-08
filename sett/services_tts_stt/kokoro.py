@@ -67,7 +67,8 @@ class KokoroTTSAdapter(TTSBase):
             except ImportError as error:
                 raise SETTServiceAdapterError(
                     "The 'kokoro' package is required to use KokoroTTSAdapter. "
-                    "Install it with: pip install sett-framework[kokoro]",
+                    "SETT installs from source; from your checkout run: "
+                    "pip install -e \".[kokoro]\"",
                     kind=AdapterErrorKind.CONFIGURATION,
                     adapter_name=type(self).__name__,
                     reason_code="adapter.dependency_missing",

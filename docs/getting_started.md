@@ -6,8 +6,12 @@ Get a working SETT system running in under 5 minutes.
 
 ## Requirements
 
-- Python 3.10 or higher
+- Python 3.11, 3.12, 3.13, or 3.14
 - pip
+
+Every one of those versions runs the full test suite, the import sweep, and
+the lint configuration in CI, on Linux and Windows. The declared range is a
+tested range, not an assumed one: see `.github/workflows/ci.yml`.
 
 The SETT core has **zero mandatory dependencies**. LLM support is optional and installed separately.
 
@@ -178,8 +182,11 @@ for entry in orchestrator.get_ethical_audit_log():
 | I want to… | Go to… |
 |---|---|
 | Understand the architecture and philosophy | [`docs/concepts.md`](concepts.md) |
-| Create my own agent from a blank, working starting point | [`templates/`](../templates/) |
+| Create my own agent, expert or adapter from a blank, working starting point | [`templates/`](../templates/) in the source tree, not in the installed package |
+| Produce user-facing text without letting the LLM invent facts | [`templates/phrasing_expert_template.py`](../templates/phrasing_expert_template.py) |
 | See a multi-agent system with health, schedule, and environment agents | [`examples/multi_agent.py`](../examples/multi_agent.py) |
 | See the EthicalFilter in action with ALLOW / WARN / REJECT scenarios | [`examples/with_ethics.py`](../examples/with_ethics.py) |
 | See the "actions as data" Executor pattern | [`examples/with_executor.py`](../examples/with_executor.py) |
+| Put an external tool loop under governance without adding a dependency | [`docs/foreign_callers.md`](foreign_callers.md) |
+| Export one governed run as a standalone record | [`examples/governance_card.py`](../examples/governance_card.py) |
 | Look up every public class and method | [`docs/api_reference.md`](api_reference.md) |

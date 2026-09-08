@@ -2,11 +2,16 @@
 
 Complete reference for all public classes and functions in the SETT framework.
 
-All public symbols can be imported directly from the `sett` package:
+The framework's root API can be imported directly from `sett`:
 
 ```python
 from sett import SETTOrchestrator, SETTAgent, SETTExpert, EthicalFilter, RiskLevel, ...
 ```
+
+Narrow extension contracts also have stable submodule APIs. In particular,
+durable backend, format, and migration contracts are exported by
+`sett.persistence`, while integrity and recovery types are exported by
+`sett.audit_ruler`.
 
 ## Adapter contracts and resilience
 
@@ -46,12 +51,21 @@ Concrete voice adapters are exported by `sett.services_tts_stt`. See
 The central coordinator of any SETT system. Holds all registered agents, manages universal memory, and applies the EthicalFilter before any action or memory write is committed.
 
 ```python
-SETTOrchestrator(ethical_filter=None)
+SETTOrchestrator(
+    ethical_filter=None,
+    *,
+    lifecycle_policy=None,
+    persistence_backend=None,
+    persistence_policy=None,
+)
 ```
 
 | Parameter | Type | Description |
 |---|---|---|
 | `ethical_filter` | `EthicalFilter \| None` | The filter to use. Defaults to `EthicalFilter()` with the default SETT ruleset. |
+| `lifecycle_policy` | `LifecyclePolicy \| None` | Optional controlled-execution timeout defaults. Omitting it imposes no timeout. |
+| `persistence_backend` | `PersistenceBackend \| None` | Optional namespace-bound evidence and state backend. Must be supplied together with `persistence_policy`. |
+| `persistence_policy` | `PersistencePolicy \| None` | Explicit durability, integrity, and audit-gap choices. Must be supplied together with `persistence_backend`; SETT supplies no defaults for these application decisions. |
 
 **Methods**
 
@@ -191,13 +205,24 @@ sequences.
 
 ### TraceRecorder
 
-Thread-safe in-memory recorder used by each orchestrator. Public methods:
+Thread-safe recorder used by each orchestrator. It remains in memory unless an
+`EvidenceStream` is configured. Public methods:
 `record()`, `get_trace()`, `export_trace()`, `register_exporter()`, `verify()`,
-and `last_event_id()`. `record()` rejects sensitive keys, non-finite numbers,
+`last_event_id()`, `restore()`, and `resume()`. `record()` rejects sensitive keys, non-finite numbers,
 unsupported objects, excessive depth, more than 32 keys, and more than 16 KiB
 of serialized attributes. `verify()` checks hashes and sequence as well as
 duplicate IDs, same-trace earlier causes, parent-run integrity, and terminal
 closure for instrumented boundaries.
+
+When durable evidence is configured, event vocabulary and complete frame size
+are bounded as documented in the changelog. An invalid start is rejected before
+it opens a boundary. If requested metadata for a known terminal is invalid, the
+recorder writes an in-contract terminal with the same outcome,
+`audit.terminal_metadata_rejected`, framework-owned component fields, and only
+the discarded reason-code and attribute counts. No rejected content is copied.
+`RecoveredTrace.terminal_metadata_fallback_event_ids` identifies these events,
+and `terminal_metadata_complete` is false even though `trace_completeness` can
+remain true.
 
 `verify(trace_id=None)` semantics (F28, defensive audit #2): the hash chain
 this recorder maintains is global, over every event it has ever recorded,
@@ -211,8 +236,27 @@ question is "is this recorder's history intact," and treat a per-trace
 `False` as "something in this recorder is broken," not "this specific
 trace was tampered with."
 
+An interrupted run with an open instrumented boundary also makes `verify()`
+return `False`; that result alone does not distinguish interruption from
+corruption. After durable recovery, use `RecoveryReport.chain_integrity` and
+the per-trace completeness fields to distinguish those two axes.
+
 Applications normally use the orchestrator's trace methods instead of
 constructing a recorder directly.
+
+When durable persistence is configured, `restore()` reads and verifies one
+stable, contiguous evidence prefix without writing to it. It returns a
+`RecoveryReport`; it does not resume interrupted work. `resume()` creates a
+recorder only from an intact report whose backend position still identifies
+the current stream head. Events buffered in a process that did not reach the
+durable stream are not replayed after restart.
+
+Once an append returns a receipt, the stream is authoritative even if the
+event's later durability confirmation fails. The recorder does not publish an
+unconfirmed anchor in its local view and rejects further events until the
+application performs explicit `restore()` and `resume()`. An append failure
+without a receipt is stricter still because both acceptance and position are
+uncertain. Neither case can continue from an older local hash.
 
 ---
 
@@ -309,13 +353,14 @@ else:
 Abstract base class for all SETT agents. Extend this class and implement `process()` to create a domain specialist.
 
 ```python
-SETTAgent(name, domain)
+SETTAgent(name, domain, *, private_memory_id=None)
 ```
 
 | Parameter | Type | Description |
 |---|---|---|
 | `name` | `str` | Human-readable name (e.g. `"HealthAgent"`). |
 | `domain` | `str` | Domain key used by the orchestrator for routing (e.g. `"health"`). |
+| `private_memory_id` | `str \| None` | Stable, opaque identity that opts this agent's `PrivateMemory` into persistence when its orchestrator has a persistence backend. |
 
 **Methods**
 
@@ -483,7 +528,7 @@ result = expert.resolve({"hour": 8})
 
 ### StubDomainAgent
 
-A generic, ready-to-use placeholder agent for a domain that isn't built yet. Unlike `agent_template.py`/`expert_template.py` in `templates/`, this needs no subclassing or customization: import it and use it directly.
+A generic, ready-to-use placeholder agent for a domain that isn't built yet. Unlike the templates in `templates/`, this needs no subclassing or customization: import it and use it directly.
 
 ```python
 from sett import StubDomainAgent
@@ -510,23 +555,35 @@ orchestrator.register_agent(HealthAgent())  # replaces the stub
 Exclusive memory belonging to one agent. Only the experts within that agent are given a reference to it, and the orchestrator is never given one. This is an API-surface convention rather than a runtime capability check (F24, defensive audit #2). See PrivateMemory's own docstring for the full rationale.
 
 ```python
-PrivateMemory(owner)
+PrivateMemory(owner, *, memory_id=None)
 ```
 
 | Parameter | Type | Description |
 |---|---|---|
 | `owner` | `str` | The name of the agent that owns this memory. |
+| `memory_id` | `str \| None` | Stable, opaque identity used only when persistence is explicitly configured. |
 
 **Methods**
 
 | Method | Returns | Description |
 |---|---|---|
-| `write(key, value)` | `None` | Store any Python value under `key`. |
+| `write(key, value, *, context=None)` | `None` | Store any Python value in ephemeral mode. Persistent mode requires strict JSON and a real ambient or explicit `ExecutionContext`. |
 | `read(key, default=None)` | `Any` | Read a value by key. Returns `default` if not found. Returns a **deep copy** (since v0.9.0), so mutating the returned value never affects stored state. |
 | `get_all()` | `dict` | **Deep copy** of all stored values (since v0.9.0). |
-| `clear()` | `None` | Remove all values. |
+| `clear(*, context=None)` | `None` | Remove all values. Persistent mode requires the same causal context as `write()`. |
 | `get_history()` | `list[dict]` | Full write history for auditing. |
 | `owner` *(property)* | `str` | The name of the owning agent. |
+| `memory_id` *(property)* | `str \| None` | The configured durable identity, or `None` in ordinary ephemeral mode. |
+
+`configure_persistence(backend=..., policy=..., trace_recorder=...)` must run
+before the first mutation and requires `memory_id`. Applications normally let
+`SETTOrchestrator.register_agent()` perform this attachment for agents that
+opted in through `private_memory_id`.
+
+`PrivateMemory.restore(owner=..., memory_id=..., report=..., backend=...,
+policy=..., historical_policies=None)` verifies and replays confirmed durable
+mutations, then resumes persistence from the report's stream head. It never
+restores a mutation whose confirmation is absent from durable evidence.
 
 ---
 
@@ -727,7 +784,7 @@ EthicalFilter(ruleset=None, context_analyzer=None)
 
 | Parameter | Type | Description |
 |---|---|---|
-| `ruleset` | `EthicalRuleset \| None` | Rules to evaluate against. Defaults to `default_ruleset()`. |
+| `ruleset` | `EthicalRuleset \| None` | Thresholds and principle the verdict is measured against. Defaults to `default_ruleset()`. |
 | `context_analyzer` | `ContextAnalyzer \| None` | Analyzer for the three-layer evaluation. Defaults to `ContextAnalyzer()`. |
 
 **Methods**
@@ -875,6 +932,13 @@ EthicalRuleset(
 
 Use `default_ruleset()` to get the pre-configured SETT default.
 
+Only `reject_threshold`, `warn_threshold` and `principle` take part in a
+verdict. The `rules` list is configuration metadata for human inspection:
+adding, removing, reweighting or deactivating rules does not change what the
+filter decides, and rule contents are not copied into emitted audit entries.
+The numeric score comes from `ContextAnalyzer`; subclass or register an
+analyzer when the scoring itself has to change.
+
 ---
 
 ### EthicalRule
@@ -889,16 +953,16 @@ EthicalRule(name, category, weight, description, active=True)
 |---|---|---|
 | `name` | `str` | Unique identifier within the ruleset (e.g. `"no_physical_harm"`). |
 | `category` | `HarmCategory` | Which harm category this rule belongs to. |
-| `weight` | `float` | Severity weight for this rule. Typically one of the `DEFAULT_HARM_WEIGHTS` values, but any positive float is valid for a custom ruleset. |
-| `description` | `str` | Human-readable explanation of what the rule guards against. Surfaced in audit logs and reasoning strings. |
-| `active` | `bool` | Whether this rule currently participates in evaluation. Defaults to `True`. |
+| `weight` | `float` | Declared severity for human inspection. It does not enter the numeric score. Typically one of the `DEFAULT_HARM_WEIGHTS` values. |
+| `description` | `str` | Human-readable explanation of what the rule guards against. It is not copied into audit entries or reasoning strings. |
+| `active` | `bool` | Whether this rule appears in `get_active_rules()`. No rule participates in numeric evaluation, so toggling this does not change a verdict. Defaults to `True`. |
 
 **Methods**
 
 | Method | Returns | Description |
 |---|---|---|
-| `activate()` | `None` | Re-enable a deactivated rule. |
-| `deactivate()` | `None` | Temporarily disable this rule without removing it from the ruleset. |
+| `activate()` | `None` | Include this rule in `get_active_rules()` again. |
+| `deactivate()` | `None` | Exclude this rule from `get_active_rules()` without removing it. No verdict changes. |
 
 ```python
 from sett import EthicalRule, HarmCategory
@@ -921,7 +985,7 @@ from sett import default_ruleset
 ruleset = default_ruleset()
 ```
 
-Returns the default `EthicalRuleset` with rules covering all six `HarmCategory` values. Use this as a starting point and extend it for domain-specific deployments.
+Returns the default `EthicalRuleset` with metadata covering all six `HarmCategory` values. Adjust `reject_threshold` and `warn_threshold` for a stricter or looser deployment, and subclass or register a `ContextAnalyzer` when scoring itself has to change.
 
 ---
 
@@ -1006,7 +1070,57 @@ The `EthicalFilter`'s verdict is still based on `ContextAnalysis.risk_score`, no
 
 ---
 
-## core_ruler: Action and SETTExecutor (v0.2.0)
+## authorization_ruler
+
+Authorization is an optional framework mode. It answers whether an
+attributable principal has authority for one exact action snapshot. It does
+not replace ethics, infer business policy, inspect prompt text, or call a
+handler. Applications provide deterministic policies and authoritative facts.
+
+| Public symbol | Contract |
+|---|---|
+| `AuthorizationRuler` | Evaluates every policy registered for an exact action type, composes the results deterministically, and issues store-backed receipts only for a complete grant. |
+| `AuthorizationVerdict` | Closed vocabulary: `GRANT`, `REQUIRE_APPROVAL`, and `DENY`. Only exact `GRANT` permits an effect. |
+| `AuthorizationRequest` | Immutable, detached action snapshot with execution identity and provenance-bearing authority fields. Raw approval evidence is not stored in this value. |
+| `AuthorizationRequestResolver` | Application-owned protocol that adds authoritative facts to SETT-owned action identity, trace identity, execution mode, operation key, and detached payload. Execution rejects any returned request that changes those owned fields. |
+| `FieldValue` / `FieldTrust` | A detached JSON-safe fact plus its source and `PROPOSED`, `AUTHORITATIVE`, or `UNKNOWN` trust declaration. Unknown authority never grants access. |
+| `ApprovalInput` | Opaque evidence routed only to its selected verifier. Policies never receive this raw value. |
+| `ApprovalRequirement` / `VerifiedApproval` | A predeclared additional-authority requirement and the immutable result produced by its verifier. |
+| `AuthorizationConstraint` | Immutable descriptor for a restriction already verified by policy. Execution does not interpret arbitrary constraint programs. |
+| `PolicyDecision` / `AuthorizationDecision` | One policy result and the deterministic aggregate of all applicable results. |
+| `AuthorizationOutcome` | Aggregate decision plus the receipt present only for a complete grant. |
+| `AuthorizationReceipt` | Public immutable receipt. Its fields alone prove nothing; issuer-owned store state remains authoritative. |
+| `ReceiptUse` | `SINGLE_USE` or `CONTROLLED_IDEMPOTENT_REPLAY`. Replay requires unanimous policy consent, controlled execution, and an idempotency key. |
+| `ExecutionMode` | Declares whether the request belongs to the plain or controlled execution path. |
+| `AuthorizationPolicy` | Protocol for deterministic policies registered by exact action type. |
+| `ApprovalVerifier` | Protocol that turns one opaque `ApprovalInput` into a `VerifiedApproval` or rejects it. |
+| `AuthorizationFingerprintPolicy` | Protocol for binding the complete request and its verified authority to a stable identifier. |
+| `AuthorizationReceiptStore` | Protocol for issuer-owned issue, atomic verification and consumption, and revocation. |
+| `AuthorizationEvidenceSink` | Protocol for sanitized authorization evidence. |
+| `AuthorizationClock` | Protocol for a timezone-aware, injectable clock. |
+| `StrictJSONAuthorizationFingerprint` | SHA-256 reference policy over a normalized typed representation. It normalizes NFC keys and values, signed zero, and integral floats; non-integral finite floats use exact hexadecimal notation. |
+| `InMemoryAuthorizationReceiptStore` | Thread-safe reference store with no restart guarantee. |
+| `InMemoryAuthorizationEvidence` | Thread-safe in-process sequence of sanitized events. |
+| `AuthorizationEvent` | Immutable event with bounded identifiers and detached JSON-safe attributes. It excludes request payloads and raw authority evidence. |
+| `SystemAuthorizationClock` | UTC system-clock implementation for ordinary wiring. |
+
+`permits_effect()` returns true only for the exact `GRANT` enum member.
+`additional_authority_may_be_evaluated()` identifies the sole verdict that may
+open the declared approval path. `validate_verdict_semantics()` enforces those
+closed meanings.
+
+`SETTAuthorizationError` is the structured runtime authorization failure.
+`SETTAuthorizationConfigurationError` identifies cases where the mechanism
+could not produce a trustworthy decision, such as a missing or invalid policy.
+Both expose a stable `reason_code` and fail closed.
+
+Controlled replay has no count limit before receipt expiry. It stays bound to
+the same complete request fingerprint and operation identity. Policy consent
+does not prove that an external provider truly implements idempotence.
+The complete stable failure vocabulary is listed in
+[`authorization_reason_codes.md`](authorization_reason_codes.md).
+
+## core_ruler Action and execution_ruler SETTExecutor
 
 ### Action
 
@@ -1029,24 +1143,34 @@ Action(action_type, payload={}, proposed_by="unknown")
 The one gate for real side effects submitted through it as `Action`s
 (`submit()`/`submit_controlled()`): first resolves the exact registered
 handler, then evaluates a routable action through the `EthicalFilter`, and
-executes the handler only if approved.
+executes the handler only if approved and, when configured, authorized.
 This is a structural guarantee for the `Action`/`SETTExecutor` path
 specifically (F19, defensive audit #2); it cannot intercept a side
 effect performed directly in application code outside this path,
 including via `propose_action()`.
 
 ```python
-SETTExecutor()
+SETTExecutor(
+    *,
+    idempotency_store=None,
+    authorization_ruler=None,
+    authorization_request_resolver=None,
+)
 ```
+
+The implementation lives in `sett.execution_ruler`. The historical
+`sett.core_ruler.executor` module remains as a compatibility re-export; both
+paths resolve to the same classes.
 
 **Methods**
 
 | Method | Returns | Description |
 |---|---|---|
 | `register_handler(action_type, handler)` | `None` | Registers the function that performs a given action type. This is the only code allowed to run that side effect. |
-| `submit(action, emotional_state="unknown", risk_profile=None, location_id="global")` | `Any` | Resolves the exact handler first. A routable action is evaluated; if approved, its handler runs and its result is returned. |
+| `submit(action, emotional_state="unknown", risk_profile=None, location_id="global", *, approval_inputs=())` | `Any` | Resolves the exact handler first. A routable action is evaluated; if approved and, when configured, authorized, its handler runs and its result is returned. |
 | `get_audit_log()` | `list[dict]` | Actions that were actually approved and executed. Rejected or unhandled actions never appear here. |
 | `registered_action_types` *(property)* | `list[str]` | Action types with a handler currently registered. |
+| `authorization_enabled` *(property)* | `bool` | Whether every handler invocation requires Authorization Ruler. |
 
 Raises `SETTEthicalFilterRejectedError` if the `EthicalFilter` blocks the
 action (handler never runs), or `SETTConfigurationError` if no handler is
@@ -1062,6 +1186,35 @@ continues to contain only actions that actually executed. `submit_controlled()`
 performs this preflight, plus attachment and filter readiness checks, before
 payload snapshots, fingerprints, idempotency reservations, and handler-attempt
 events.
+
+Authorization configuration is all or nothing. `authorization_ruler` and
+`authorization_request_resolver` must be supplied together. Once enabled,
+every registered handler invocation resolves an `AuthorizationRequest` from
+the same detached payload evaluated by Ethics. Execution rejects a resolver
+that changes SETT-owned action identity, trace identity, action type, execution
+mode, operation key, or payload. A complete grant issues a receipt, which is
+verified and consumed before `handler.authorized` and before the handler can
+run. Missing policies, denial, unresolved approval, expiry, revocation,
+receipt mismatch, resolver failure, or store failure all leave the handler
+unreachable.
+
+The configured path snapshots action identity before invoking exporters or
+resolvers. Mutating the caller's `Action` cannot make the selected handler
+borrow a grant for another action type. Each actual invocation obtains a fresh
+decision and consumes its receipt; a completed idempotency replay does not
+invoke a handler or claim a new authorization decision.
+
+The local resolver must preserve payload structure and strict JSON scalar
+representation, not merely Python equality (`True == 1`). This check uses
+the existing in-process JSON reference encoder and is not a durable format.
+Receipt fingerprint normalization is a different contract: it supports
+equivalent transported requests without authorizing the resolver to change
+the snapshot that Ethics evaluated and the handler receives.
+
+The trace records `authorization.receipt_verified` immediately before
+`handler.authorized`, or `authorization.receipt_rejected` on failure. Both use
+content-free attributes. Payloads, principals, resources, scope, raw approval
+inputs, and request fingerprints remain outside trace attributes.
 
 ---
 
@@ -1202,8 +1355,8 @@ Deliberately does not play audio, write files, or touch any UI: that is an appli
 Concrete adapters (not exported from `sett` directly, install their optional dependency first):
 
 ```python
-from sett.services_tts_stt.google import GoogleTTSAdapter       # pip install sett-framework[google-tts-stt]
-from sett.services_tts_stt.elevenlabs import ElevenLabsTTSAdapter  # pip install sett-framework[elevenlabs]
+from sett.services_tts_stt.google import GoogleTTSAdapter       # pip install -e ".[google-tts-stt]"
+from sett.services_tts_stt.elevenlabs import ElevenLabsTTSAdapter  # pip install -e ".[elevenlabs]"
 ```
 
 Both raise `SETTServiceAdapterError` on misconfiguration or provider failure (missing credentials, network error, unsupported voice, etc.).
@@ -1229,7 +1382,7 @@ class MySTTAdapter(STTBase):
 Deliberately does not own a microphone, a listening loop, or any concurrency guard: that orchestration belongs in the application/Expert layer that calls this adapter, not inside it (see the Concurrency section below).
 
 ```python
-from sett.services_tts_stt.google import GoogleSTTAdapter  # pip install sett-framework[google-tts-stt]
+from sett.services_tts_stt.google import GoogleSTTAdapter  # pip install -e ".[google-tts-stt]"
 ```
 
 `TTSBase` and `STTBase` are deliberately two separate interfaces, not one merged "voice" interface: a provider is free to implement only one of them.
@@ -1255,7 +1408,7 @@ class MySentimentAdapter(SentimentBase):
 | `analyze(text, **kwargs)` | `SentimentResult` | Analyzes the sentiment of `text`. `**kwargs` are provider-specific (language, etc.). |
 
 ```python
-from sett.services_sentiment.google import GoogleSentimentAdapter  # pip install sett-framework[google-sentiment]
+from sett.services_sentiment.google import GoogleSentimentAdapter  # pip install -e ".[google-sentiment]"
 ```
 
 Raises `SETTServiceAdapterError` on misconfiguration or provider failure.
@@ -1297,6 +1450,146 @@ Frozen dataclass.
 
 ---
 
+## Durable persistence and recovery
+
+Durable persistence is opt-in. Its stable public API lives in
+`sett.persistence`; recovery and boundary-disposition types live in
+`sett.audit_ruler`. The `sett` root continues to expose the framework's
+structured persistence and audit-closure exceptions.
+
+`PersistenceBackend` binds one opaque `namespace_id` to two narrow protocols:
+
+| Contract | Responsibility |
+|---|---|
+| `EvidenceStream` | Append-only opaque evidence with compare-and-append continuity, stable backend positions, idempotent `write_id` replay, prefix reads, and `flush()`. |
+| `StateRecordStore` | Opaque random-access state records with idempotent `write_id` replay and backend-owned `state_ref` values. |
+
+The SQLite reference backend stores both its `backend_id` and `namespace_id`
+in the database and rejects a reopen that supplies either identity
+differently. A namespace is stable and non-reassignable; it is not a mutable
+display name.
+
+Both contracts return attributable receipts. `DurabilityLevel` names the
+failure class a backend declares that accepted bytes survive:
+`IN_MEMORY`, `PROCESS_CRASH`, `POWER_LOSS`, `MEDIA_LOSS`, or `NODE_LOSS`.
+`UNKNOWN` is outside that order and never satisfies a requirement. These are
+backend declarations, not physical proof. `health()` is a passive observation
+and does not imply durability.
+
+Third-party backends can run the dependency-free
+`sett.testing.assert_evidence_stream_contract()` and
+`assert_state_record_store_contract()` probes against fresh test instances.
+The probes verify exact-byte replay, conflicts, stream continuity, foreign and
+unknown positions, reads, receipts, random access, durability declarations,
+and passive health views without inspecting implementation internals.
+
+`PersistencePolicy` requires four explicit application choices:
+`snapshot_durability`, `evidence_durability`, an `IntegrityPolicy`, and an
+`AuditGapPolicy`. Snapshot durability must be at least as strong as evidence
+durability. `Sha256IntegrityPolicy` is the unkeyed reference implementation;
+it detects mismatched bytes but allows equality correlation and candidate
+guessing for low-entropy values. `NoDigestPolicy` records that integrity was
+deliberately disabled. Applications can implement keyed policies, but key
+storage and rotation remain outside SETT.
+
+The in-memory backend implements the contracts for tests and single-process
+use and can declare only `IN_MEMORY`. The SQLite reference backend reads its
+effective journal and synchronous settings before declaring a level:
+
+```python
+from sett import SETTOrchestrator
+from sett.audit_ruler import Sha256IntegrityPolicy
+from sett.persistence import (
+    AuditGapPolicy,
+    DurabilityLevel,
+    PersistencePolicy,
+    SQLitePersistenceBackend,
+)
+
+backend = SQLitePersistenceBackend.open(
+    "sett-state.sqlite3",
+    namespace_id="application.instance.01",
+    backend_id="sqlite.local",
+)
+policy = PersistencePolicy(
+    snapshot_durability=DurabilityLevel.POWER_LOSS,
+    evidence_durability=DurabilityLevel.POWER_LOSS,
+    integrity_policy=Sha256IntegrityPolicy(),
+    audit_gap_policy=AuditGapPolicy.ESCALATE_KNOWN_OUTCOME,
+)
+orchestrator = SETTOrchestrator(
+    persistence_backend=backend,
+    persistence_policy=policy,
+)
+```
+
+Two properties of that backend are worth stating next to the example.
+
+The database path is used as given, and SETT sets no permissions on it.
+Create and restrict the containing directory before calling `open()`: the
+`-wal` and `-shm` sidecars are created and removed across SQLite's own
+open/close cycle, so the directory is the only durable control point.
+`docs/security_model.md` carries the observed modes and the deployment
+procedure.
+
+Infrastructure failures from the driver are normalized at the backend
+boundary. Every one of them raises `SETTPersistenceError` with a stable
+`persistence.sqlite.<operation>_failed` reason code, the attributable
+`backend_id`, and the original `sqlite3` exception as `__cause__`, so an
+application catching `SETTPersistenceError` cannot miss a failure that the
+reference backend itself produced. The structured failures that already had
+meaning - `SETTIdempotencyConflictError`,
+`SETTPersistenceContinuityError`, `SETTPersistencePositionError`,
+`SETTConfigurationError`, `SETTValidationError`, and the `state.record_missing`
+reason code - keep their types and semantics.
+
+In v0.14.0, orchestrator persistence is integrated only with
+`run_pipeline_controlled()`. Configuring a backend makes `process()`,
+`process_controlled()`, and `run_pipeline()` fail before application work so
+they cannot return a value without expressing the durable audit-closure axis.
+Their behavior is unchanged when persistence is not configured.
+
+`TraceRecorder.restore()` verifies a stable durable prefix and returns a
+`RecoveryReport`. The report separates `chain_integrity`, per-trace
+`trace_completeness`, reconstructed execution status, unresolved boundaries,
+and stage descriptors. It contains no stage outputs. A start without a durable
+terminal remains unresolved; SETT never invents an exception, terminal, or
+automatic retry for it. `materialize_stage_output()` separately locates,
+verifies, validates, and decodes one descriptor and returns both an
+`IntegrityStatus` and a `MaterializationStatus`.
+
+An application can append a typed explanation for an unresolved boundary with
+`record_boundary_disposition()`. A disposition records its evidentiary basis
+and any claimed outcome at the current stream head. It does not become the
+missing terminal and does not make the original lifecycle complete.
+
+Pipeline stage outputs are persisted before `pipeline.stage_completed` can be
+recorded. `PrivateMemory` persistence is separately opt-in through a stable
+`memory_id`. With an orchestrator backend configured, an agent opts in by
+passing `private_memory_id` to `SETTAgent.__init__()`. Persistent writes and
+clears require a real ambient or explicit `ExecutionContext`, accept strict
+JSON values, and reach the state store before the live memory changes.
+Ephemeral `PrivateMemory` keeps accepting ordinary Python values as before.
+`PrivateMemory.restore()` replays only evidence-confirmed mutations.
+
+`MigrationPlan` performs one-hop, one-to-one, copy-on-write schema migrations
+inside one namespace and one state store. `dry_run_stage_migration()` and
+`dry_run_private_memory_migration()` derive a canonical manifest from durable
+evidence; they never enumerate the record store. Execution requires a ready
+dry-run, preserves the source record, confirms each destination before
+recording its link, and rejects stale or branched lineages. Rollback after a
+confirmed migration is another forward migration. Retention, compaction,
+cross-namespace transfer, import, production secret storage, persistent
+idempotency through this backend, `UniversalMemory` restoration, and automatic
+pipeline resumption are outside v0.14.0.
+
+Durable trace persistence lets verification survive a process restart while
+the retained prefix and resume position remain intact. It is not a digital
+signature, proof of authorship, or protection against an actor who can replace
+the complete chain and its storage.
+
+---
+
 ## Logging
 
 Importing `sett` attaches a `logging.NullHandler` to the package logger and
@@ -1307,29 +1600,38 @@ handlers installed by the application on `sett` or any ancestor logger.
 
 ## Concurrency
 
-SETT's core components (`UniversalMemory`, `EthicalFilter`, `SETTExecutor`, `PrivateMemory`) are not evaluated under concurrent access, with five documented exceptions:
+SETT's core components (`UniversalMemory`, `EthicalFilter`, `SETTExecutor`, `PrivateMemory`) are not evaluated under concurrent access, with ten documented exceptions:
 
 - `UniversalMemory` holds an internal lock around its store and history so that concurrent `update()` / `read()` / `publish_environmental_context()` calls do not corrupt shared state.
 - `TraceRecorder` (see above) holds its own internal `threading.RLock()` around `record()` so that concurrent tracing calls from multiple threads do not lose events or corrupt the hash chain - verified under a stress test of 8 concurrent threads each recording 200 events (1600 events total, zero loss, `verify()` returns `True` afterward).
 - `ExecutionControlRegistry` (v0.12.0) holds an internal `threading.RLock()` around registration, release, snapshot, lookup, subtree cancellation, callback registration and `wait()`. This one is not optional: cancellation exists to be requested from a thread other than the one running the work, so a registry that was not safe to share would have nothing to offer. Registration and subtree cancellation take the same lock, which is what closes the window where a control registering just after its ancestor was cancelled could miss it. Observing cancellation afterwards is a lock-free `Event.is_set()`, because checkpoints run far more often than cancellations happen.
 - `InMemoryIdempotencyStore` (v0.12.0) holds an internal `threading.RLock()` around its records and its attempt log, so two threads reserving the same key cannot both come back holding it.
 - `CircuitBreaker` (v0.13.0) holds an internal `threading.RLock()` around state transitions, failure counts and half-open probe admission. One instance may be shared by concurrent callers: a stress test with 8 threads recording 250 transient failures each preserves all 2,000 failures and opens the circuit exactly once. This guarantee covers the breaker's own in-process state, not the adapter calls it guards.
+- `InMemoryEvidenceStream` serializes head reads, compare-and-append, replay checks, prefix reads, and flushes with an internal `threading.RLock()`. A stress test with 8 threads and 800 distinct writes preserves every entry. A caller that races on an old head still receives the documented continuity error and must retry from the new head.
+- `InMemoryStateRecordStore` serializes record writes, idempotent replay, lookup, and reads with an internal `threading.RLock()`. The same 8-thread test preserves and retrieves all 800 records.
+- `SQLitePersistenceBackend` shares one `threading.RLock()` across its evidence and state views and opens its connection for guarded cross-thread use. A stress test with 8 threads performing 200 evidence appends and 200 state writes preserves every distinct identity. This does not make two independent backend objects coordinate outside SQLite's own transaction semantics.
+- `InMemoryAuthorizationReceiptStore` serializes issue, revocation, and verification/consumption with an internal `threading.RLock()`. Across 2,000 competing consumptions from 8 threads, exactly one can consume a single-use receipt.
+- `InMemoryAuthorizationEvidence` serializes event appends and snapshot reads with an internal `threading.RLock()`. A stress test with 8 threads recording 200 events each preserves all 1,600 distinct events.
 
-All five guarantees are deliberately narrow: each protects only the state
+All ten guarantees are deliberately narrow: each protects only the state
 described above within one process. `UniversalMemory` protects its store and
 history, while `TraceRecorder` protects event order and its hash chain. The
 registry, idempotency store, and circuit breaker protect their own control
-state; none extends any guarantee to a handler, adapter, agent, cleanup
-callback, or exporter reached through them. `InMemoryIdempotencyStore` in
+state. The persistence implementations protect their own stream or record
+operations. Authorization reference stores protect their own receipts and
+event sequence, not the Ruler's complete evaluate/issue/consume workflow.
+None extends any guarantee to a policy, verifier, resolver, handler, adapter,
+agent, cleanup callback, codec, transform, or exporter reached through them. `InMemoryIdempotencyStore` in
 particular says nothing about what happened before the process started; an
 application injects a durable store when it needs more than that.
 
-Outside of those five guarantees, SETT does not currently make a thread-safety claim for the framework as a whole: no adapter, agent base class, or expert base class has been tested under concurrent access, and none advertises being safe for it. This applies to `PrivateMemory`, `EthicalFilter`'s audit log, `SETTExecutor`'s audit log, and the LLM/TTS/STT/sentiment adapters equally.
+Outside of those ten guarantees, SETT does not currently make a thread-safety claim for the framework as a whole: no adapter, agent base class, or expert base class has been tested under concurrent access, and none advertises being safe for it. This applies to `PrivateMemory`, `EthicalFilter`'s audit log, `SETTExecutor`'s audit log, and the LLM/TTS/STT/sentiment adapters equally.
 
 Practical implications for a deployment:
 
 - Running multiple `SETTOrchestrator` instances in separate processes or async tasks, each with its own agents, is the supported pattern for parallelism today (this is exactly what `EnvironmentalContext` and `publish_environmental_context()` exist to coordinate across instances).
-- Sharing a single `SETTAgent`, `PrivateMemory`, or `EthicalFilter` instance across multiple threads or concurrent coroutines without external synchronization is not a tested configuration. `UniversalMemory`, `TraceRecorder`, `ExecutionControlRegistry`, `InMemoryIdempotencyStore`, and `CircuitBreaker` are exceptions within the narrow scopes stated above: they are built to be shared across threads.
+- Sharing a single `SETTAgent`, `PrivateMemory`, or `EthicalFilter` instance across multiple threads or concurrent coroutines without external synchronization is not a tested configuration. `UniversalMemory`, `TraceRecorder`, `ExecutionControlRegistry`, `InMemoryIdempotencyStore`, `CircuitBreaker`, `InMemoryEvidenceStream`, `InMemoryStateRecordStore`, `SQLitePersistenceBackend`, `InMemoryAuthorizationReceiptStore`, and `InMemoryAuthorizationEvidence` are the ten narrow exceptions.
+- `InMemoryEvidenceStream`, `InMemoryStateRecordStore`, and `SQLitePersistenceBackend` may be shared as described above. This protects their own storage operations; migration transforms and application codecs remain caller-owned code with no concurrency guarantee from SETT.
 - An STT adapter's `transcribe()` being called concurrently for overlapping audio streams is an application-layer concern: guard it in the calling Expert or Agent, not inside the adapter (this mirrors why `STTBase` deliberately does not own a listening loop or a lock itself).
 
 This is a documentation gap being closed, not a new restriction: the underlying behavior has not changed. A future release may extend the same lock-based pattern already used by `UniversalMemory` and `TraceRecorder` to other shared components if a real deployment need appears.
@@ -1355,6 +1657,11 @@ All SETT exceptions inherit from `SETTError`.
 | `SETTTimeoutError` | An `ExecutionControl` exceeded its `Deadline`. Nobody asked; the work did not fit in the time it was given, which is frequently retryable. Carries structured attributes (see below). |
 | `SETTDependencyError` | A unit never became reachable because something it needed failed. Deliberately not a cancellation: nobody ever asked anything of it. Carries structured attributes (see below). |
 | `SETTIdempotencyConflictError` | An `idempotency_key` was reused with a payload that fingerprints differently, which means two different actions are claiming one identity. Carries structured attributes (see below). |
+| `SETTPersistenceError` | Base class for attributable persistence failures. Carries a stable `reason_code` and optional `backend_id`. |
+| `SETTPersistenceFormatError` | Durable bytes violate their declared framing or format. Also inherits from `ValueError`. |
+| `SETTPersistenceContinuityError` | Compare-and-append would extend an evidence stream from a stale or incompatible head. |
+| `SETTPersistencePositionError` | A stream position is invalid or belongs to another backend or stream. Also inherits from `ValueError`. |
+| `SETTAuditClosureError` | An execution outcome is known, but the configured policy refuses to return it without confirmed durable audit closure. Retrying the underlying effect is not safe. |
 | `SETTValidationError` | A data-carrying value fails its own validation (e.g. a `RiskProfile` pillar outside `[0.0, 1.0]`). Also inherits from `ValueError`, on purpose: catching either `SETTError` or `ValueError` catches this, the same pattern the standard library's `json.JSONDecodeError` uses. Not raised by `Action` or `BiometricReading`, which do not validate their fields. |
 
 ```python
@@ -1519,9 +1826,18 @@ exception instance with its concrete type and attributes intact.
 | `state` | `ExecutionState` | Status, reason code, timestamps, measured duration. |
 | `status` | `ExecutionStatus` | Shortcut for `state.status`. |
 | `reason_code` | `str \| None` | Shortcut for `state.reason_code`. |
+| `audit_closure` | `AuditClosure` | Independent durable-audit axis: `NOT_REQUESTED`, `SATISFIED`, `UNSATISFIED`, or `UNCONFIRMED`. It never changes the execution outcome. |
 | `succeeded` / `cancelled` / `timed_out` / `rejected` / `partial` | `bool` | One per status worth branching on. |
 | `unwrap()` | `T` | Value, or the original exception re-raised. |
 | `success(...)` / `failure(...)` / `not_executed(...)` | `ExecutionResult` | Factories; each refuses a state whose status disagrees with it. |
+
+When persistence is configured, a known execution outcome can coexist with an
+audit gap if its terminal evidence could not be confirmed. Under
+`RETURN_KNOWN_OUTCOME`, the caller receives that result and must inspect
+`audit_closure`. Under `ESCALATE_KNOWN_OUTCOME`, SETT raises
+`SETTAuditClosureError` carrying the same result and closure object. The
+underlying action must not be retried merely because its audit terminal is
+missing.
 
 **`value` is a reference, not a snapshot.** `ExecutionResult` is a frozen
 dataclass, and "frozen" in Python means its fields cannot be reassigned -
@@ -1546,9 +1862,10 @@ nobody can. Code that needs a true snapshot takes its own `deepcopy()`.
 
 | Member | Returns |
 |---|---|
-| `submit_controlled(action, ..., retry_policy=None, timeout_seconds=None)` | `ExecutionResult` |
+| `submit_controlled(action, ..., retry_policy=None, timeout_seconds=None, approval_inputs=())` | `ExecutionResult` |
 | `register_controlled_handler(action_type, handler)` | `None` |
 | `idempotency_store` | `IdempotencyStore` |
+| `authorization_enabled` | `bool` |
 
 `submit_controlled()` performs a static readiness and route preflight, then
 wraps `submit()` rather than reimplementing the executable path. Filter

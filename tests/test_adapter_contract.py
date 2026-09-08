@@ -21,7 +21,7 @@ from sett import (
     TraceRecorder,
     select_adapter,
 )
-from sett.core_ruler.adapter import adapter_call_scope
+from sett.core_ruler.adapter import adapter_call_scope, normalized_adapter_error
 from sett.core_ruler.lifecycle import ExecutionControl, lifecycle_scope
 from sett.services_llm.base import LLMBase
 
@@ -100,6 +100,60 @@ def test_error_safe_view_never_contains_message_or_cause():
     assert view["kind"] == "authentication"
     assert "message" not in view
     assert "secret" not in repr(view)
+
+
+# ── L-01: the public message carries no provider-supplied text ─────────
+#
+# Defensive and infrastructure audit of v0.14.0, finding L-01. The audit
+# put a synthetic bearer token in a provider exception and recovered it
+# from the adapter error's public string. ``safe_view()`` was already
+# clean; the leak was ``str(error)``, which ordinary application logging
+# formats by default. The sentinel below is the audit's own probe.
+
+_PROVIDER_SENTINEL = "Authorization: Bearer SECRET-SENTINEL-123456789"
+
+
+def _sentinel_error(**overrides):
+    cause = RuntimeError(_PROVIDER_SENTINEL)
+    defaults = {
+        "error_type": SETTServiceAdapterError,
+        "provider": "azure_speech",
+        "adapter_name": "AzureTTSAdapter",
+        "operation": "synthesize",
+    }
+    error = normalized_adapter_error(cause, **{**defaults, **overrides})
+    error.__cause__ = cause
+    return error
+
+
+def test_a_normalized_message_is_built_only_from_controlled_identifiers():
+    error = _sentinel_error(kind=AdapterErrorKind.AUTHENTICATION)
+
+    assert str(error) == "azure_speech synthesize failed (authentication)"
+
+
+def test_a_normalized_message_excludes_provider_supplied_text():
+    error = _sentinel_error(kind=AdapterErrorKind.AUTHENTICATION)
+
+    assert "SECRET-SENTINEL-123456789" not in str(error)
+    assert "SECRET-SENTINEL-123456789" not in repr(error.safe_view())
+
+
+def test_the_provider_exception_is_still_reachable_as_the_cause():
+    """Removing the text from the message must not remove the diagnosis."""
+    error = _sentinel_error(kind=AdapterErrorKind.AUTHENTICATION)
+
+    assert isinstance(error.__cause__, RuntimeError)
+    assert "SECRET-SENTINEL-123456789" in str(error.__cause__)
+
+
+def test_a_protocol_status_is_controlled_data_and_stays_in_the_message():
+    """The status comes from the transport, not from provider prose."""
+    error = _sentinel_error(status_code=429)
+
+    assert str(error) == "azure_speech synthesize failed (quota, status 429)"
+    assert error.status_code == 429
+    assert error.retryable is True
 
 
 def test_selection_rejects_unknown_instead_of_treating_it_as_no():

@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Generic, TypeVar
 
+from sett.audit_ruler.closure import AuditClosure
 from sett.core_ruler.lifecycle import validate_duration_seconds
 from sett.exceptions import (
     SETTDependencyError,
@@ -173,6 +174,13 @@ class ExecutionResult(Generic[T]):
     value: T | None = None
     error_type: str | None = None
     exception: BaseException | None = None
+    audit_closure: AuditClosure = field(default_factory=AuditClosure.not_requested)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.audit_closure, AuditClosure):
+            raise SETTValidationError(
+                "ExecutionResult.audit_closure must be an AuditClosure."
+            )
 
     @property
     def status(self) -> ExecutionStatus:
@@ -242,13 +250,20 @@ class ExecutionResult(Generic[T]):
         state: ExecutionState,
         trace_id: str,
         run_id: str | None = None,
+        audit_closure: AuditClosure | None = None,
     ) -> ExecutionResult[T]:
         """Build a successful result; refuses a non-SUCCESS state."""
         if state.status is not ExecutionStatus.SUCCESS:
             raise SETTValidationError(
                 "ExecutionResult.success() requires a SUCCESS state."
             )
-        return cls(state=state, trace_id=trace_id, run_id=run_id, value=value)
+        return cls(
+            state=state,
+            trace_id=trace_id,
+            run_id=run_id,
+            value=value,
+            audit_closure=audit_closure or AuditClosure.not_requested(),
+        )
 
     @classmethod
     def failure(
@@ -259,6 +274,7 @@ class ExecutionResult(Generic[T]):
         trace_id: str,
         run_id: str | None = None,
         value: T | None = None,
+        audit_closure: AuditClosure | None = None,
     ) -> ExecutionResult[T]:
         """Build a non-successful result around the real exception."""
         if state.status is ExecutionStatus.SUCCESS:
@@ -272,6 +288,7 @@ class ExecutionResult(Generic[T]):
             value=value,
             error_type=type(exception).__name__,
             exception=exception,
+            audit_closure=audit_closure or AuditClosure.not_requested(),
         )
 
     @classmethod

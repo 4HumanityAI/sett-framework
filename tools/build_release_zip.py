@@ -1,4 +1,8 @@
-"""Build a deterministic source ZIP for the current SETT release.
+"""Build a source ZIP with fixed, platform-independent entry metadata.
+
+Byte reproducibility requires identical source bytes, the same source root
+name, and a matching Python/zlib compression toolchain. Fixed metadata does
+not promise identical compression across arbitrary toolchain versions.
 
 The default archive name is derived from ``sett.__version__`` rather than
 written out, because the version string here used to be a literal and
@@ -9,8 +13,8 @@ test already guards instead of adding a third place to keep in step.
 """
 from __future__ import annotations
 
+import argparse
 import re
-import sys
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
@@ -51,10 +55,9 @@ EXCLUDED_FILE_NAMES = {
 
 # Glob patterns evaluated only against files directly at the project
 # root (not recursively): MIGRATION_*.md documents a specific past
-# upgrade path. This project has no real external adopters yet, and no
-# release has ever shipped, so there is no obligatory convention to
-# preserve here; the framework does not maintain per-release migration
-# guides at all. Excluding them unconditionally (rather than keeping the
+# upgrade path. The framework records upgrade notes in CHANGELOG.md and
+# repository history rather than maintaining per-release migration
+# guides. Excluding them unconditionally (rather than keeping the
 # current version's guide) avoids the accumulation risk a future minor
 # bump would otherwise carry: nothing here deletes or updates an older
 # guide automatically, so a forgotten one would simply pile up in the
@@ -94,12 +97,20 @@ def included_files(root: Path) -> list[Path]:
 
 
 def build(root: Path, output: Path) -> None:
+    root = root.resolve()
+    output = output.resolve()
+    if output.is_relative_to(root):
+        raise ValueError("Release output must be outside the source tree.")
+    files = included_files(root)
+    if any(path.relative_to(root).parts[0].startswith("-") for path in files):
+        raise ValueError("Source tree contains an option-like root artifact.")
     prefix = root.name
     with ZipFile(output, "w", compression=ZIP_DEFLATED, compresslevel=9) as archive:
-        for path in included_files(root):
+        for path in files:
             relative = path.relative_to(root).as_posix()
             info = ZipInfo(f"{prefix}/{relative}", FIXED_TIMESTAMP)
             info.compress_type = ZIP_DEFLATED
+            info.create_system = 3  # Unix metadata matches the fixed POSIX mode.
             info.external_attr = 0o100644 << 16
             archive.writestr(info, path.read_bytes(), compresslevel=9)
 
@@ -121,12 +132,25 @@ def default_destination(root: Path) -> Path:
     return root.parent / f"SETT_Framework_v{declared_version(root)}_AUDIT.zip"
 
 
-if __name__ == "__main__":
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "destination", nargs="?", type=Path,
+        help="Output ZIP outside the source tree (default: version-derived sibling).",
+    )
+    arguments = parser.parse_args(argv)
     source_root = Path(__file__).resolve().parents[1]
     destination = (
-        Path(sys.argv[1]).resolve()
-        if len(sys.argv) > 1
+        arguments.destination.resolve()
+        if arguments.destination is not None
         else default_destination(source_root)
     )
-    build(source_root, destination)
+    try:
+        build(source_root, destination)
+    except ValueError as error:
+        parser.error(str(error))
     print(destination)
+
+
+if __name__ == "__main__":
+    main()

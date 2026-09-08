@@ -1,0 +1,26 @@
+# What belongs in a source distribution of this project.
+#
+# setuptools' default sdist carries the package and little else. For SETT
+# that default is wrong twice over: the documented install path is from
+# source, and the L-02 disposition of the v0.14.0 audit states that the
+# templates are reachable from the source tree rather than from the wheel.
+# An sdist without docs/ and templates/ would make that statement false
+# for anyone who obtained the project as an sdist.
+#
+# The wheel is deliberately unaffected. Only "sett*" is packaged there;
+# templates stay files you copy, not modules SETT imports.
+
+include CHANGELOG.md
+include CONTRIBUTING.md
+include SPONSORS.md
+include MANIFEST.in
+include .gitattributes
+include .gitignore
+
+recursive-include docs *.md
+recursive-include templates *.py *.md
+recursive-include tools *.py
+recursive-include examples *.py
+recursive-include .github *.yml
+
+global-exclude __pycache__ *.py[cod]

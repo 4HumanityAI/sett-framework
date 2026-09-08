@@ -23,7 +23,8 @@ def require_requests(*, adapter_name: str, extra: str) -> Any:
     if requests is None:
         raise SETTServiceAdapterError(
             f"The 'requests' package is required to use {adapter_name}. "
-            f"Install it with: pip install sett-framework[{extra}]",
+            "SETT installs from source; from your checkout run: "
+            f"pip install -e \".[{extra}]\"",
             kind=AdapterErrorKind.CONFIGURATION,
             adapter_name=adapter_name,
             reason_code="adapter.dependency_missing",

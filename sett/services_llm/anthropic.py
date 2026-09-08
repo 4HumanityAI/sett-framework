@@ -7,7 +7,7 @@ This is the recommended adapter for SETT-based systems.
 Implements the LLMBase interface: swap with any other adapter
 without changing the rest of the framework.
 
-Requires: pip install sett-framework[anthropic]
+Requires, from a source checkout: pip install -e ".[anthropic]"
 """
 from __future__ import annotations
 
@@ -79,7 +79,8 @@ class AnthropicAdapter(LLMBase):
         except ImportError:
             raise SETTLLMAdapterError(
                 "The 'anthropic' package is required to use the AnthropicAdapter. "
-                "Install it with: pip install sett-framework[anthropic]",
+                "SETT installs from source; from your checkout run: "
+                "pip install -e \".[anthropic]\"",
                 kind=AdapterErrorKind.CONFIGURATION,
                 provider="anthropic",
                 adapter_name=type(self).__name__,

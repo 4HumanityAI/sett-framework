@@ -7,15 +7,13 @@ Text-to-speech and speech-to-text adapters backed by Google Cloud
 Implements TTSBase and STTBase: fully interchangeable with any other
 provider's adapters (e.g. ElevenLabsTTSAdapter for synthesis).
 
-Ported from the recovered Virtual-assistant-1st-attempt prototype
+Ported from an early recovered prototype
 (Speaker/Listener classes, Nov. 2024): same underlying Google Cloud
 calls, reshaped to the stateless adapter contract: no UI coupling, no
 playback, no listening loop. Those concerns stayed in the recovered
-code as reference (Archivo_legado/Prototipos_2022-2024/
-Virtual-assistant-1st-attempt/recovered_original/), they were
-intentionally not carried over here.
+code as reference; they were intentionally not carried over here.
 
-Requires: pip install sett-framework[google-tts-stt]
+Requires, from a source checkout: pip install -e ".[google-tts-stt]"
 """
 from __future__ import annotations
 
@@ -82,8 +80,8 @@ class GoogleTTSAdapter(TTSBase):
         except ImportError:
             raise SETTServiceAdapterError(
                 "The 'google-cloud-texttospeech' package is required to use "
-                "GoogleTTSAdapter. Install it with: "
-                "pip install sett-framework[google-tts-stt]",
+                "GoogleTTSAdapter. SETT installs from source; from your "
+                "checkout run: pip install -e \".[google-tts-stt]\"",
                 kind=AdapterErrorKind.CONFIGURATION,
                 provider="google_cloud_tts",
                 adapter_name=type(self).__name__,
@@ -207,8 +205,8 @@ class GoogleSTTAdapter(STTBase):
         except ImportError:
             raise SETTServiceAdapterError(
                 "The 'google-cloud-speech' package is required to use "
-                "GoogleSTTAdapter. Install it with: "
-                "pip install sett-framework[google-tts-stt]",
+                "GoogleSTTAdapter. SETT installs from source; from your "
+                "checkout run: pip install -e \".[google-tts-stt]\"",
                 kind=AdapterErrorKind.CONFIGURATION,
                 provider="google_cloud_stt",
                 adapter_name=type(self).__name__,

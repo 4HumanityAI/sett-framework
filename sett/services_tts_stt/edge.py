@@ -72,7 +72,8 @@ class EdgeTTSAdapter(TTSBase):
         except ImportError as error:
             raise SETTServiceAdapterError(
                 "The 'edge-tts' package is required to use EdgeTTSAdapter. "
-                "Install it with: pip install sett-framework[edge-tts]",
+                "SETT installs from source; from your checkout run: "
+                "pip install -e \".[edge-tts]\"",
                 kind=AdapterErrorKind.CONFIGURATION,
                 adapter_name=type(self).__name__,
                 reason_code="adapter.dependency_missing",

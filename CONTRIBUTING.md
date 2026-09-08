@@ -19,8 +19,21 @@ includes:
 
 1. Fork the repository
 2. Create a branch for your change
-3. Make sure `python -m pytest tests/ -v` passes before opening a PR
-4. Open a Pull Request describing what changed and why
+3. Install the pinned development tools with `python -m pip install -e ".[dev]"`
+4. Run `python -m ruff check .` from that same environment
+5. Make sure `python -m pytest tests/ -v` passes before opening a PR
+6. Open a Pull Request describing what changed and why
+
+The lint gate is defined by the pinned Ruff version in `pyproject.toml`. A Ruff
+binary found elsewhere on `PATH` is not a release result because rule behavior
+can differ between versions.
+
+Build the source archive with `python tools/build_release_zip.py`; use
+`--help` for an optional destination outside the source tree. Entry metadata
+is fixed across operating systems. Matching a published archive byte for byte
+also requires identical source bytes, the same source directory name, and a
+matching Python/zlib compression toolchain; different compressed bytes alone
+do not establish that source content was altered.
 
 If you're adding a new agent/expert pattern or touching `ethics_ruler`,
 a quick Issue first (before writing code) is a good idea: it's a

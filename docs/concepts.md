@@ -96,7 +96,7 @@ SETT evaluates risk across three independent layers that work together to give t
 
 ### Layer 1: Action harm score
 
-Every action is evaluated against a set of harm categories with configurable weights: physical harm (10), psychological harm (8), economic harm (6), autonomy violations (5), harmful omission (4), and ambiguity (2). This layer asks: what is this specific action, and how harmful could it be?
+Every action receives a harm score from `ContextAnalyzer`. The default analyzer uses explicit keyword heuristics; a deployment can register a domain-specific analyzer for an exact action type when scoring needs structured domain data instead. `HarmCategory` and its declared weights are ruleset metadata for human inspection and do not enter this numeric calculation. This layer asks: what is this specific action, and how harmful could it be?
 
 ### Layer 2: User risk profile (RiskProfile)
 
@@ -130,7 +130,7 @@ Every decision, allow, warn, or reject, is written to an immutable audit log. Th
 
 The guiding principle behind the default ruleset: do not cause direct or indirect harm to human beings.
 
-The ruleset is configurable. A medical deployment might have different thresholds than an enterprise deployment. But the filter itself, the layer that intercepts actions, is always present in any SETT system. While the default rules can be adjusted, we strongly recommend staying aligned with Asimov's Three Laws of Robotics as a minimum ethical baseline.
+The ruleset is configurable. A medical deployment might use different thresholds than an enterprise deployment. `reject_threshold`, `warn_threshold` and `principle` affect the filter; the rules list remains inspectable configuration metadata. Change the analyzer when the score itself needs domain-specific behavior. The filter, the layer that intercepts actions, remains present in every SETT system.
 
 ---
 

@@ -4,7 +4,7 @@ SETT Framework: EthicalFilter
 The governance layer of SETT. Implements the full three-layer
 hybrid risk evaluation:
 
-  Layer 1: Action harm score (HarmCategory weights)
+  Layer 1: Action harm score (ContextAnalyzer keyword heuristics)
   Layer 2: User state (RiskProfile three pillars)
   Layer 3: Environmental context (RiskLevel 0–5)
 

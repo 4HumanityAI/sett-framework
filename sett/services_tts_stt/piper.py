@@ -57,7 +57,8 @@ class PiperTTSAdapter(TTSBase):
             if executable is None:
                 raise SETTServiceAdapterError(
                     "The Piper executable is required to use PiperTTSAdapter. "
-                    "Install it with: pip install sett-framework[piper]",
+                    "SETT installs from source; from your checkout run: "
+                    "pip install -e \".[piper]\"",
                     kind=AdapterErrorKind.CONFIGURATION,
                     provider="piper",
                     adapter_name=type(self).__name__,

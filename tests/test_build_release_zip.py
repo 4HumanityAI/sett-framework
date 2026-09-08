@@ -11,9 +11,11 @@ stray egg-info or cache directory inside an audit zip.
 """
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
 from zipfile import ZipFile
+from zipfile import ZipInfo as StandardZipInfo
 
 import pytest
 
@@ -175,3 +177,138 @@ def test_default_destination_uses_the_declared_version(synthetic_project):
     destination = brz.default_destination(synthetic_project)
     assert destination.name == "SETT_Framework_v9.9.9_AUDIT.zip"
     assert destination.parent == synthetic_project.parent
+
+
+def test_build_metadata_is_independent_of_zipinfo_host_default(
+    synthetic_project, tmp_path, monkeypatch
+):
+    archives = []
+    for host_system in (0, 3):
+        def host_zip_info(*args, system=host_system, **kwargs):
+            info = StandardZipInfo(*args, **kwargs)
+            info.create_system = system
+            return info
+
+        monkeypatch.setattr(brz, "ZipInfo", host_zip_info)
+        output = tmp_path / f"host-{host_system}.zip"
+        brz.build(synthetic_project, output)
+        archives.append(output.read_bytes())
+        with ZipFile(output) as archive:
+            for info in archive.infolist():
+                assert info.create_system == 3
+                assert info.external_attr == 0o100644 << 16
+                assert info.date_time == brz.FIXED_TIMESTAMP
+    assert archives[0] == archives[1]
+
+
+@pytest.mark.parametrize("arguments", [["--help"], ["--unknown"], ["a.zip", "b.zip"]])
+def test_cli_help_and_invalid_arguments_never_build(
+    synthetic_project, monkeypatch, capsys, arguments
+):
+    def forbidden_build(*args):
+        pytest.fail("Argument handling must finish before opening an archive.")
+
+    monkeypatch.setattr(brz, "build", forbidden_build)
+    monkeypatch.chdir(synthetic_project)
+    with pytest.raises(SystemExit) as caught:
+        brz.main(arguments)
+    assert caught.value.code == (0 if arguments == ["--help"] else 2)
+    output = capsys.readouterr()
+    assert "usage:" in (output.out + output.err)
+    assert not (synthetic_project / "--help").exists()
+
+
+def test_build_rejects_an_output_inside_source_before_overwriting(
+    synthetic_project,
+):
+    output = synthetic_project / "README.md"
+    original = output.read_bytes()
+    with pytest.raises(ValueError, match="outside the source tree"):
+        brz.build(synthetic_project, output)
+    assert output.read_bytes() == original
+
+
+def test_build_rejects_an_existing_option_named_artifact_before_writing(
+    synthetic_project, tmp_path,
+):
+    (synthetic_project / "--help").write_bytes(b"old accidental archive")
+    output = tmp_path / "release.zip"
+    output.write_bytes(b"previous release")
+    with pytest.raises(ValueError, match="option-like"):
+        brz.build(synthetic_project, output)
+    assert output.read_bytes() == b"previous release"
+
+
+def test_cli_accepts_an_explicit_destination(tmp_path, monkeypatch):
+    output = tmp_path / "release.zip"
+    calls = []
+    monkeypatch.setattr(brz, "build", lambda root, target: calls.append((root, target)))
+    brz.main([str(output)])
+    assert calls == [(Path(brz.__file__).resolve().parents[1], output.resolve())]
+
+
+def test_cli_preserves_the_version_derived_default(monkeypatch):
+    calls = []
+    monkeypatch.setattr(brz, "build", lambda root, target: calls.append((root, target)))
+    brz.main([])
+    root = Path(brz.__file__).resolve().parents[1]
+    assert calls == [(root, brz.default_destination(root))]
+
+
+def test_script_help_prints_usage_without_creating_a_file(tmp_path):
+    result = subprocess.run(
+        [sys.executable, "-B", brz.__file__, "--help"],
+        cwd=tmp_path, capture_output=True, text=True, check=True,
+    )
+    assert "usage:" in result.stdout
+    assert not list(tmp_path.iterdir())
+
+
+# ── the archive ships raw bytes, so line endings are release content ────
+
+CRLF = b"\r\n"
+
+
+def test_no_release_file_carries_windows_line_endings():
+    """`.gitattributes` normalizes a checkout; it does not normalize a build.
+
+    ``build()`` copies each file's bytes verbatim. A maintainer editing on
+    Windows with a tool that writes CRLF therefore ships CRLF, whatever
+    ``.gitattributes`` says, and the archive stops matching the checkout
+    everyone else has. That happened while preparing v0.14.0: a scripted
+    documentation edit rewrote twenty files with CRLF and nothing in the
+    suite objected. The archive is the artifact under review, so the check
+    belongs to the archive.
+    """
+    root = Path(__file__).resolve().parents[1]
+    offenders = sorted(
+        path.relative_to(root).as_posix()
+        for path in brz.included_files(root)
+        if CRLF in path.read_bytes()
+    )
+    assert not offenders, (
+        "These release files carry CRLF line endings and would ship that "
+        f"way: {offenders}. Rewrite them with LF."
+    )
+
+
+def test_the_release_archive_carries_the_templates_and_the_workflow():
+    """The documented access path for both is the source tree (L-02).
+
+    `templates/` is not packaged in the wheel by design, so the release
+    archive and the checkout are the only places it exists. Saying so in
+    `templates/README.md` is worth nothing if a future exclusion rule
+    quietly drops the directory, and the same applies to the CI workflow
+    that proves the declared Python range.
+    """
+    root = Path(__file__).resolve().parents[1]
+    included = {
+        path.relative_to(root).as_posix() for path in brz.included_files(root)
+    }
+
+    assert "templates/README.md" in included
+    assert "templates/adapter_template.py" in included
+    assert "templates/agent_template.py" in included
+    assert "templates/expert_template.py" in included
+    assert "templates/phrasing_expert_template.py" in included
+    assert ".github/workflows/ci.yml" in included

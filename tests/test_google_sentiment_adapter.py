@@ -1,8 +1,8 @@
 """
 SETT Framework: Tests: GoogleSentimentAdapter
 ======================================================
-google-cloud-language is an optional dependency (pip install
-sett-framework[google-sentiment]): not installed in this test
+google-cloud-language is an optional dependency (from a source checkout,
+pip install -e ".[google-sentiment]"): not installed in this test
 environment, same situation as the TTS/STT Google adapters. See
 test_google_tts_stt_adapters.py's module docstring for why sys.modules
 injection (not mocking an installed SDK) is the testing strategy here,
@@ -223,7 +223,11 @@ class TestGoogleSentimentAdapterAnalyze:
             adapter = GoogleSentimentAdapter()
             with pytest.raises(SETTServiceAdapterError) as exc_info:
                 adapter.analyze("hola")
-            assert "quota exceeded" in str(exc_info.value)
+            # L-01: the provider's own text is reachable through the
+            # chained cause, never through the public message.
+            assert "quota exceeded" not in str(exc_info.value)
+            assert "google_cloud_sentiment analyze failed" in str(exc_info.value)
+            assert "quota exceeded" in str(exc_info.value.__cause__)
 
 
 class TestSentimentResultAndSentenceSentiment:

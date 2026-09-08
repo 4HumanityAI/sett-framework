@@ -20,7 +20,7 @@ call is carried over: engine selection, local playback, and
 output-file pruning were application-layer concerns in that script and
 do not belong in a stateless adapter.
 
-Requires: pip install sett-framework[elevenlabs]
+Requires, from a source checkout: pip install -e ".[elevenlabs]"
 """
 from __future__ import annotations
 
@@ -94,8 +94,8 @@ class ElevenLabsTTSAdapter(TTSBase):
         if requests is None:
             raise SETTServiceAdapterError(
                 "The 'requests' package is required to use "
-                "ElevenLabsTTSAdapter. Install it with: "
-                "pip install sett-framework[elevenlabs]",
+                "ElevenLabsTTSAdapter. SETT installs from source; from your "
+                "checkout run: pip install -e \".[elevenlabs]\"",
                 kind=AdapterErrorKind.CONFIGURATION,
                 provider="elevenlabs",
                 adapter_name=type(self).__name__,

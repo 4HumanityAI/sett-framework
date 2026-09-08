@@ -1,0 +1,139 @@
+# Continuous verification of the compatibility SETT declares.
+#
+# pyproject.toml claims a range of supported Python versions. Until
+# v0.14.0 nothing proved it: the suite ran on one interpreter and the
+# range was asserted. The defensive and infrastructure audit of v0.14.0
+# raised that as M-03, and closing it found a real defect the moment a
+# second interpreter ran - `sett/persistence/sqlite.py` imported
+# `typing.Self`, so `import sett` raised ImportError on the 3.10 the
+# project declared. The declared floor is now 3.11 and every declared
+# version runs here on every push.
+#
+# The matrix is the declaration. Adding a classifier to pyproject.toml
+# without adding it below is what this file exists to prevent.
+
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One failing interpreter must not hide the state of the others:
+      # the point of a matrix is knowing which cells are red.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+        include:
+          # POSIX file modes, path handling, and SQLite sidecar behaviour
+          # differ by platform, so both families are covered on every
+          # version. macOS is a third POSIX family and is checked once,
+          # on the newest interpreter, rather than eight more times.
+          - os: macos-latest
+            python-version: "3.14"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install the project and its pinned development tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Ruff (pinned in the dev extra, configured in pyproject.toml)
+        run: python -m ruff check .
+
+      - name: compileall
+        run: python -m compileall -q sett tools templates examples
+
+      - name: Import sweep
+        run: python tools/import_sweep.py
+
+      - name: Test suite
+        run: python -m pytest -q
+
+      - name: Test suite with warnings treated as errors
+        run: python -m pytest -q -W error
+
+      - name: pip check
+        run: python -m pip check
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+      - name: Measure coverage
+        run: python -m pytest -q --cov=sett --cov-report=term-missing
+
+  release-checks:
+    name: Release artifacts
+    runs-on: ubuntu-latest
+    # A wheel that builds is not a wheel that installs. This job builds
+    # the artifact, installs it into an empty environment with no source
+    # tree on the path, and imports the public entry point from there.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Build the wheel and the source distribution
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+
+      - name: Install the built wheel into an empty environment
+        run: |
+          python -m venv /tmp/clean
+          /tmp/clean/bin/python -m pip install --upgrade pip
+          /tmp/clean/bin/python -m pip install dist/*.whl
+          /tmp/clean/bin/python -m pip check
+
+      - name: Import the public entry point from the installed package
+        # Run from a directory with no source tree, so a passing import
+        # cannot be the checkout shadowing the installed distribution.
+        working-directory: /tmp
+        run: |
+          /tmp/clean/bin/python -c "
+          import sett
+          from sett import SETTOrchestrator
+          print('installed sett', sett.__version__, SETTOrchestrator.__name__)
+          "
+
+      - name: Build the release ZIP
+        run: python tools/build_release_zip.py "${{ runner.temp }}/release.zip"
+
+      - name: Upload the release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sett-release-artifacts
+          path: |
+            dist/*
+            ${{ runner.temp }}/release.zip

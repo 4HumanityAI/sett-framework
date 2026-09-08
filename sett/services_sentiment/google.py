@@ -6,7 +6,7 @@ Sentiment analysis adapter backed by Google Cloud Natural Language.
 Implements SentimentBase: fully interchangeable with any other
 provider's adapter.
 
-Ported from the recovered Virtual-assistant-1st-attempt prototype
+Ported from an early recovered prototype
 (SentimentAnalyzer class, Nov. 2024): same underlying sentiment call
 (`language_v1.LanguageServiceClient().analyze_sentiment`), reduced to
 just that. Two things present in the original were deliberately not
@@ -25,7 +25,7 @@ carried over:
     exactly the kind of two-responsibilities-in-one-expert pattern
     Convention #1's corollary already documents splitting.
 
-Requires: pip install sett-framework[google-sentiment]
+Requires, from a source checkout: pip install -e ".[google-sentiment]"
 """
 from __future__ import annotations
 
@@ -87,8 +87,8 @@ class GoogleSentimentAdapter(SentimentBase):
         except ImportError:
             raise SETTServiceAdapterError(
                 "The 'google-cloud-language' package is required to use "
-                "GoogleSentimentAdapter. Install it with: "
-                "pip install sett-framework[google-sentiment]",
+                "GoogleSentimentAdapter. SETT installs from source; from your "
+                "checkout run: pip install -e \".[google-sentiment]\"",
                 kind=AdapterErrorKind.CONFIGURATION,
                 provider="google_cloud_sentiment",
                 adapter_name=type(self).__name__,

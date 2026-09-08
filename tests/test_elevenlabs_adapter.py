@@ -117,11 +117,17 @@ class TestElevenLabsTTSAdapterErrorHandling:
         assert "401" in str(exc_info.value)
 
     @patch("sett.services_tts_stt.elevenlabs.requests.post")
-    def test_an_oversized_http_error_body_is_bounded(self, mock_post):
-        """F29 regression (defensive audit #2): an HTTP error body from
-        the provider used to be embedded up to 500 characters with no
-        marker that it had been cut. It is now bounded to the same
-        limit as an adapter exception message, with a visible marker."""
+    def test_an_http_error_body_never_reaches_the_public_message(self, mock_post):
+        """F29 (defensive audit #2), then L-01 (v0.14.0 audit).
+
+        F29 bounded an HTTP error body that used to be embedded up to 500
+        characters with no marker that it had been cut. Bounding capped its
+        length and nothing else, so the body still reached any log line
+        that formatted the exception. L-01 removed it from the public
+        message entirely: the message is now built only from values SETT
+        controls, and the body stays on ``__cause__``, where it is still
+        bounded and still visible in a local traceback.
+        """
         from sett.exceptions import DEFAULT_PROVIDER_ERROR_MAX_LENGTH
 
         huge_body = "e" * (DEFAULT_PROVIDER_ERROR_MAX_LENGTH + 300)
@@ -132,8 +138,11 @@ class TestElevenLabsTTSAdapterErrorHandling:
             adapter.synthesize("hello")
 
         message = str(exc_info.value)
-        assert len(message) < len(huge_body)
-        assert "[truncated]" in message
+        assert message == "ElevenLabs synthesize failed (unavailable, status 500)"
+        assert "e" * 20 not in message
+        cause = str(exc_info.value.__cause__)
+        assert "[truncated]" in cause
+        assert len(cause) < len(huge_body)
 
     @patch("sett.services_tts_stt.elevenlabs.requests.post")
     def test_network_error_raises_sett_service_adapter_error(self, mock_post):

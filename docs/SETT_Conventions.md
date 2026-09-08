@@ -30,9 +30,11 @@ The system works completely without an LLM. Formalized in `PhrasingExpert`: dete
 No `RiskProfile` value leaks into the audit log or shared memory. Verified by a contract test.
 
 **8. Three-layer filter, with calculation/documentation separated.**
-Score = `ContextAnalyzer` (keywords + `HarmCategory` weights) modulated by `RiskProfile` and `EnvironmentalContext` (which *tightens* thresholds, never relaxes them: `effective_reject = max(1.0, reject_threshold - env_modifier)`). **`EthicalRuleset.rules` is documentation/audit; it does not feed the numeric calculation** (only `reject_threshold`, `warn_threshold`, `principle` are read).
+Score = `ContextAnalyzer` (keyword heuristics) modulated by `RiskProfile` and `EnvironmentalContext` (which *tightens* thresholds, never relaxes them: `effective_reject = max(1.0, reject_threshold - env_modifier)`). **`EthicalRuleset.rules` is configuration metadata for human inspection; it does not feed the numeric calculation or emitted audit entries** (only `reject_threshold`, `warn_threshold`, `principle` are read).
 
-**9. Biometric safety net as an override.** `human_at_risk` forces the score to the reject threshold regardless of keywords, since the human-life layer is not configurable away.
+**9. Biometric urgency as a review signal, not an override.** `human_at_risk` is an urgency and audit signal. It does **not** modify the harm score and does not force any threshold. Its only effect on a verdict is a conservative promotion `ALLOW -> WARN` when the action is not classified as protective, recorded in the audit entry as `human_at_risk_without_protective_classification`. It never downgrades a REJECT, and it never penalizes an action a domain analyzer has explicitly marked protective. The human-life layer remains non-configurable in the sense that this promotion cannot be switched off, not in the sense that urgency overrides the score.
+
+*Corrected note (v0.14.0 revision):* this convention previously read "`human_at_risk` forces the score to the reject threshold regardless of keywords, since the human-life layer is not configurable away." That stopped being true in **v0.8.0 (2026-07-25)**, when `SafetyAssessment` separated `situation_urgency` from `action_harm_risk` and the CHANGELOG recorded that "`human_at_risk` is now an urgency/audit signal rather than an implicit near-rejection score"; this convention was not updated at the time and stayed stale for six minor versions. `docs/api_reference.md` and `docs/security_model.md` already described the current behavior correctly, and three tests pin it: `test_human_at_risk_without_protective_classification_promotes_allow_to_warn`, `test_human_at_risk_protective_action_remains_allow`, and `test_human_at_risk_promotion_does_not_downgrade_existing_reject`. Verified by execution on v0.14.0: a `human_at_risk=True` context reaches `WARN` with `harm_score=0.0` against an `effective_reject_threshold` of `8.0`. Recorded here rather than silently rewritten, per #16.
 
 **10. Additive extensibility, always.**
 Every addition to the core must leave existing code unaware that it exists. Precedents: `register_analyzer` (a specific analyzer per action_type, generic as a fallback for everything else), structured attributes on exceptions (optional kwargs, `str(e)` intact byte for byte), automatic propagation via `_current_*` (no subclass rewrites needed).
@@ -87,10 +89,12 @@ harm. Keeping it consistent is what gives the label its value, not decoration.
 *(added 07/23 - completes #22, same criterion: document what was
 already practiced without being written down.)*
 
-`core_ruler`, `ethics_ruler`, `memory_ruler`, `risk_ruler` are not four more
-Agents; they are the four structural pillars that **govern** every
-Agent/Expert/Adapter that exists, in SETT or in any application built on
-SETT. The hierarchy of importance, from most to least fundamental:
+Packages such as `core_ruler`, `ethics_ruler`, `memory_ruler`, `risk_ruler`,
+`audit_ruler`, `biometric_ruler`, `authorization_ruler`, and
+`execution_ruler` are not more Agents; they are structural pillars that
+**govern** every Agent, Expert, and Adapter that exists in SETT or in an
+application built on it. The hierarchy of importance, from most to least
+fundamental:
 
 ```
 *_ruler/      → the framework's constitution: what may exist and under what rules.
@@ -105,20 +109,25 @@ SETT. The hierarchy of importance, from most to least fundamental:
 
 Practical consequence: the `Ruler` suffix is reserved for new pillars of the
 framework itself, not for an application's important domain agent
-(`IdentityAgent` is still an `Agent` even though it is central to the
-companion-assistant application; it
+(`IdentityAgent` is still an `Agent` even though it is central to a consuming
+application; it
 does not become `IdentityRuler` just for being important). And for the same
 reason a new Expert weighs less than a new Agent (#1), and a change to the
 core weighs more than one to an app (#14, #15): a new `*_ruler` is a
 candidate for an even stricter version of the two-instances rule than the
 rest, and it is only justified once it governs something that genuinely does
-not fit within the four existing pillars, not before.
+not fit within the existing pillars, not before.
+
+The suffix may also name the class that implements the defining boundary of a
+new pillar. Existing boundary classes that predate this convention, including
+`EthicalFilter`, keep their established names for compatibility; this does not
+make `EthicsRuler` an automatic or desirable alias.
 
 Note for work in progress (STT/TTS/sentiment): `ContextAnalyzer`'s own
 docstring already mentions a `SentimentAnalyzerAgent` as a planned
 integration, confirming that sentiment analysis enters as an **Adapter**
-that a future domain **Agent** (probably first in the companion-assistant
-application, see rule #14)
+that a future domain **Agent** (probably first in a consuming application, see
+rule #14)
 consumes and publishes as `emotional_state`, not as a new `*_ruler`. The day
 emotional state stops being a string that different Agents decorate and
 becomes a structure as central as `RiskProfile`, that is when evaluating a
@@ -140,7 +149,7 @@ the next time a new pillar is evaluated.
 ## B. Process conventions (methodologically citable in the paper)
 
 **14. The two-instances rule.**
-Nothing enters the core until it has appeared **twice, independently, in real downstream use**. One instance = solved standalone in the app; two = a candidate for generalization, designing the API against both cases at once (they may reveal different requirements). Precedents: `PhrasingExpert` (promoted after 2 instances), `PrivateMemory` persistence (threshold met, awaiting its turn), `PhrasingExpert`'s verification hook (1 instance, on hold).
+Nothing enters the core until it has appeared **twice, independently, in real downstream use**. Here, "enters" means a new capability promoted from application use, not code already in the framework being moved or separated. Existing-core changes remain governed by #15; a genuinely new pillar also requires #23. One instance = solved standalone in the app; two = a candidate for generalization, designing the API against both cases at once (they may reveal different requirements). Precedents: `PhrasingExpert` (promoted after 2 instances), `PrivateMemory` persistence (promoted after the threshold was met), `PhrasingExpert`'s verification hook (1 instance, on hold).
 
 **15. Extracted from use, not speculated.**
 Every change to the core is justified by a concrete conflict found while building a real application, not by anticipatory design. (v0.4.0 was the turning point: all three additions say "extracted from real usage.")
@@ -182,8 +191,8 @@ A version that is ready and verified gets published when it's ready, never held 
 **Explicit v0.13.2 exception.** `PocketTTSAdapter` is additive public API in
 the `sett.services_tts_stt` submodule and would ordinarily require a minor
 release under this convention. The maintainer explicitly chose to keep it in
-the still-unpublished v0.13.2 patch because Pocket TTS became known only days
-before that release closed and met an immediate need for a local CPU TTS
+the v0.13.2 patch, which was unpublished at the time of that decision, because
+Pocket TTS became known only days before that release closed and met an immediate need for a local CPU TTS
 option. Splitting one completed review cycle into two unpublished versions
 would create history rather than preserve it. This is a recorded one-time
 exception, not a reinterpretation of public API and not a precedent that

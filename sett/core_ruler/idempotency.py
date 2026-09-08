@@ -223,11 +223,12 @@ def key_digest(key: str) -> str:
 
 
 def result_digest(value: Any) -> str:
-    """A short, non-reversible summary of a handler's result.
+    """A short summary used to compare handler outcomes without storing them.
 
-    Stored instead of the result itself for the same reason attempts hold
-    no payload: it is enough to tell two outcomes apart, and it cannot
-    leak what the outcome contained.
+    This digest is not encryption or a confidentiality boundary. Low-entropy
+    outcomes may be recoverable by guessing candidate values, and equal
+    outcomes remain correlatable. It stays inside the idempotency record and
+    is not suitable as durable state-integrity evidence.
     """
     try:
         encoded = json.dumps(

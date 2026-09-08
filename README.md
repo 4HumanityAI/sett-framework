@@ -2,26 +2,32 @@
 
 **Scalable Expert-based Task Topology**
 
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/downloads/)
+[![CI](https://github.com/EduDanielV/sett-framework/actions/workflows/ci.yml/badge.svg)](https://github.com/EduDanielV/sett-framework/actions/workflows/ci.yml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-blue)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.21287133-blue)](https://doi.org/10.5281/zenodo.21287133)
 [![Sponsor](https://img.shields.io/badge/sponsor-%E2%9D%A4-red)](https://github.com/sponsors/EduDanielV)
 
-**Current source release: 0.13.2** includes the v0.13 adapter capabilities,
-passive health, normalized errors, explicit capability-based selection,
-sanitized adapter tracing, and opt-in retry/circuit breaking. SETT describes
-and filters adapters but never chooses a provider: applications construct,
-name, and order every route themselves. The voice roster now includes
-remote, local, and explicitly community/unofficial implementations, all
-behind the existing `TTSBase`/`STTBase` boundaries. A dependency-free
-`sett.testing` kit lets third-party adapters verify the same contract. This
-patch also removes implicit stderr logging overhead and rejects unroutable
-actions before governance, payload, or idempotency work begins. The local
-voice roster now includes an optional Kyutai Pocket TTS adapter with lazy
-model loading, voice conditioning, and complete PCM16 WAV output.
-See [`docs/adapters.md`](docs/adapters.md), the canonical
-[`adapter contract`](docs/adapter_contract.md), and
-[`CHANGELOG.md`](CHANGELOG.md) for details.
+**Current source release: 0.14.0** adds opt-in durable evidence and state,
+pure restart recovery, explicit audit closure, versioned formats, and
+copy-on-write migrations. SETT persists stage outputs before claiming their
+completion, reconstructs incomplete pipelines without automatically resuming
+them, and keeps materialization separate from evidence inspection. Durable
+`PrivateMemory` remains opt-in through an explicit identity. In-memory and
+SQLite reference backends implement the same narrow public contracts, with a
+dependency-free `sett.testing` kit for third-party implementations. See the
+[API reference](docs/api_reference.md), [security model](docs/security_model.md),
+and [CHANGELOG](CHANGELOG.md) for the complete guarantees and limitations.
+
+Version 0.13 introduced adapter capabilities, passive health, normalized
+errors, explicit capability-based selection, sanitized adapter tracing, and
+opt-in retry and circuit breaking. SETT describes and filters adapters but
+never chooses a provider: applications construct, name, and order every route
+themselves. The voice roster includes remote, local, and explicitly
+community/unofficial implementations behind the existing `TTSBase` and
+`STTBase` boundaries, including optional Kyutai Pocket TTS. See
+[`docs/adapters.md`](docs/adapters.md) and the canonical
+[`adapter contract`](docs/adapter_contract.md).
 
 Version 0.12.0 added lifecycle management: cancellation, deadlines,
 structured outcomes and idempotency, entirely alongside the existing API.
@@ -72,6 +78,7 @@ separates:
 - **Communication**: agents publish events, they never call each other directly
 - **Memory**: private per agent, universal only for final results
 - **Execution**: real-world side effects submitted through `SETTExecutor` run through a single, auditable gate
+- **Authorization**: optional deterministic authority policies become mandatory for every handler once configured
 - **Ethical validation**: a governance layer, not a prompt that can be skipped
 
 This separation makes complex multi-agent systems easier to audit, extend,
@@ -94,6 +101,15 @@ pip install -e ".[openai]"      # GPT
 pip install -e ".[gemini]"      # Gemini
 pip install -e ".[all]"         # All adapters
 ```
+
+Supported interpreters are Python 3.11, 3.12, 3.13 and 3.14. Every one of
+them runs the full suite, the import sweep and the pinned lint configuration
+in CI, on Linux and Windows, on every push. The declared range and the tested
+range are the same range, and a test fails if they ever stop being.
+
+The `templates/` directory lives in the source tree and the release archive,
+not in the installed package: a template is a file you copy and edit, not a
+module SETT imports.
 
 > 💡 Want a free, offline, local LLM instead? `OllamaAdapter` needs no
 > extra install at all: just [Ollama](https://ollama.com) itself
@@ -169,6 +185,9 @@ for entry in orchestrator.get_ethical_audit_log():
 - ✔ Monotonic deadlines that nest downward and never extend upward
 - ✔ Structured outcomes that keep a rejection, a timeout and a failure apart
 - ✔ Idempotency keys and opt-in retries at the real-world effect boundary
+- ✔ Opt-in durable evidence, versioned state and pure restart recovery
+- ✔ Copy-on-write migrations with evidence-derived dry-runs
+- ✔ Optional receipt-backed Authorization Ruler with fail-closed effect enforcement
 - ✔ Swappable LLM adapters (Claude, GPT, Gemini, Ollama)
 
 ## Core concepts
@@ -178,13 +197,21 @@ for entry in orchestrator.get_ethical_audit_log():
 | `SETTOrchestrator` | Brain of the system. Coordinates agents, manages universal memory. |
 | `SETTAgent` | Domain specialist composed of experts. Has its own private memory. |
 | `SETTExpert` | Atomic unit. Resolves one specific task. |
-| `SETTExecutor` | The one gate for real-world side effects submitted through it (`submit_action()`/`submit()`/`submit_controlled()`), executed only after ethical approval. Side effects performed directly in application code, outside `SETTExecutor`, are not intercepted. |
+| `SETTExecutor` | The one gate for real-world side effects submitted through it (`submit_action()`/`submit()`/`submit_controlled()`), executed only after ethical approval and, when configured, receipt verification. Side effects performed directly in application code, outside `SETTExecutor`, are not intercepted. |
 | `Action` | A real-world side effect described as data, not code. |
+| `AuthorizationRuler` | Optional deterministic authority boundary. Once configured, every handler requires a policy grant and a verified store-backed receipt. |
 | `UniversalMemory` | Shared state. Agents publish only final results here. |
 | `PrivateMemory` | Each agent's internal workspace. Not exposed through the public API; isolated by convention, not by a runtime access-control boundary. |
 | `EthicalFilter` | Governance layer. Every action submitted through `SETTExecutor` passes through it before execution. |
 | `ContextAnalyzer` | Evaluates a proposed action in context; domain analyzers can return a `SafetyAssessment` separating urgency, action harm, and omission risk. |
 | `run_pipeline()` | Orchestrator method. Chains registered agents into an ordered sequence of stages with explicit, hand-to-hand data flow, never through universal memory, and fail-closed rejection handling. See `docs/api_reference.md`. |
+
+Authorization contracts and wiring are documented in
+[`docs/api_reference.md`](docs/api_reference.md#authorization_ruler); stable
+failure identifiers are listed in
+[`docs/authorization_reason_codes.md`](docs/authorization_reason_codes.md).
+Governing a tool loop from another framework adds no dependency in either
+direction: see [`docs/foreign_callers.md`](docs/foreign_callers.md).
 
 ## Four principles of SETT
 
@@ -225,9 +252,9 @@ by changing the adapter.
 Real-world side effects (`submit_action`) follow a separate, fail-closed path:
 
 ```
-Agent ──Action──▶ EthicalFilter ──approved?──▶ SETTExecutor ──▶ real client
-                       │
-                       └──rejected──▶ nothing runs (fail closed)
+Agent ──Action──▶ EthicalFilter ──approved?──▶ Authorization ──▶ SETTExecutor ──▶ real client
+                       │                         │
+                       └──rejected───────────────┴──▶ nothing runs (fail closed)
 ```
 
 ## Roadmap

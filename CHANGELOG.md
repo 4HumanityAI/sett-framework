@@ -2,6 +2,380 @@
 
 All notable changes to the SETT framework are documented here.
 
+## [0.14.0] - 2026-09-03
+
+Opt-in durable evidence, versioned state, pure recovery, explicit audit
+closure, copy-on-write migrations, deterministic authorization, and a separate
+execution boundary. SETT restores what durable evidence can support and never
+resumes interrupted work automatically.
+
+### Added
+
+- Added `sett.authorization_ruler`: detached requests with explicit field
+  provenance, exact policy registration, restrictive deterministic composition,
+  verified additional authority, and store-backed receipts. Only `GRANT`
+  permits an effect; `DENY` and unresolved `REQUIRE_APPROVAL` do not.
+- Added policy-owned `ReceiptUse`. Receipts default to `SINGLE_USE`; controlled
+  idempotent replay requires unanimous policy consent, a controlled request,
+  and an operation key. Expiry, revocation, and complete receipt/request
+  matching remain mandatory. The in-memory receipt store makes no restart
+  guarantee, and policy consent does not prove external idempotence.
+- Added a versioned strict JSON authorization fingerprint with typed nodes,
+  NFC normalization before key ordering, normalized numeric equivalents, and
+  exact hexadecimal non-integral floats. Normative vectors cover equivalent
+  values, invalid inputs, and stable expected digests. This representation is
+  separate from historical trace preimages.
+- Added `AuthorizationRequestResolver` and optional paired executor
+  configuration. Once enabled, authorization is mandatory for every handler
+  invocation. Ethics runs first; the resolver preserves SETT-owned identity
+  and payload; a receipt is issued and consumed before `handler.authorized`.
+  Raw approval inputs reach verifiers through a separate channel, never
+  policies or trace attributes. No per-action bypass is provided.
+- Added sanitized authorization evidence and structured authorization errors.
+  Composition conflicts emit evidence before raising. Execution traces link
+  `authorization.receipt_verified` to `handler.authorized` and report rejected
+  authority without claiming that a handler ran.
+- Added the public `sett.persistence` API. `EvidenceStream` and
+  `StateRecordStore` keep append-only evidence separate from random-access
+  state while `PersistenceBackend` binds both to one stable, opaque namespace.
+  Receipts carry backend identity and declared durability; `UNKNOWN` remains
+  outside the durability order and never satisfies an application requirement.
+- Added versioned binary formats for exact trace preimages, stream positions,
+  stage-state envelopes, private-memory mutations, and migration manifests.
+  Recovery verifies the exact bytes that were persisted and never relies on a
+  JSON round trip to reproduce a historical hash.
+- Added `IntegrityPolicy`, `Sha256IntegrityPolicy`, and `NoDigestPolicy`.
+  State digests cover the complete envelope except its backend-owned locator.
+  SHA-256 is documented as change detection, not secrecy or authentication;
+  keyed policies remain application-owned because SETT does not manage keys.
+- Added thread-safe in-memory reference implementations and a SQLite reference
+  backend with transactional compare-and-append and idempotent state writes.
+  SQLite durability declarations come from effective pragma readback rather
+  than requested settings. Each SQLite file is bound to both its backend and
+  namespace identities. WAL with FULL or EXTRA can declare `POWER_LOSS`;
+  rollback journals require EXTRA for that declaration, while FULL remains a
+  conservative `PROCESS_CRASH`. Both backends pass the reusable,
+  dependency-free contract probes exported by `sett.testing`.
+- Added pure durable recovery through `TraceRecorder.restore()` and explicit
+  continuation through `TraceRecorder.resume()`. `RecoveryReport` separates
+  chain integrity, trace completeness, reconstructed outcome, unresolved
+  boundaries, stage descriptors, diagnostics, and the last durable position.
+  One interrupted trace no longer makes a complete trace look incomplete.
+  The stream remains authoritative when an accepted anchor cannot confirm its
+  required durability, but the unconfirmed anchor is not published in the
+  local view. A failed confirmation or an append with no receipt blocks
+  further recording until explicit recovery, preventing continuation from an
+  uncertain durable prefix or stream head.
+- Added durable stage-output persistence for `run_pipeline_controlled()`.
+  Exact state bytes reach the required durability before
+  `pipeline.stage_completed` can claim completion. Materialization is a
+  separate explicit operation that reports both integrity and interpretation
+  status before returning a value.
+- Added opt-in `PrivateMemory` persistence through a stable `memory_id`.
+  Writes and clears require a real execution context, record durable intent,
+  persist strict JSON state before changing the live view, and record a
+  content-free confirmation. Restoration replays only confirmed mutations;
+  ordinary ephemeral memory retains its existing Python-value behavior.
+- Added `AuditClosure` as an axis independent from `ExecutionStatus`. A known
+  effect outcome can be returned with an explicit audit gap or escalated as
+  `SETTAuditClosureError`, according to the required `AuditGapPolicy`. Neither
+  response marks the effect as failed or makes retrying it safe.
+- Added append-only boundary dispositions with typed evidentiary bases.
+  A disposition explains an unresolved boundary without fabricating its
+  missing terminal or changing the reconstructed lifecycle result.
+- Added deterministic, copy-on-write migrations for stage outputs and private
+  memory. Mandatory dry-runs derive canonical manifests from durable evidence,
+  preserve both diagnostic axes, ignore unreferenced orphans, reject stale or
+  branched lineages, preserve transitive trust, and replay destination writes
+  idempotently after an interrupted attempt.
+- Added reusable adapter and phrasing-expert templates. The adapter template
+  fails closed until its provider call and result mapping are implemented and
+  names the provider SDK rather than an unavailable SETT package extra.
+- Added `.github/workflows/ci.yml`. Every declared Python version runs the
+  suite, the warnings-as-errors suite, the pinned Ruff configuration,
+  `compileall`, the import sweep, and `pip check` on Linux and Windows, with
+  macOS covered once on the newest interpreter. A separate job builds the
+  wheel and the source distribution, installs the wheel into an empty
+  environment, imports `SETTOrchestrator` from outside the source tree, and
+  builds the release archive.
+- Added `tools/import_sweep.py`. It imports every module in the package with
+  no optional provider SDK installed and reports the roster rather than
+  stopping at the first failure. The audit ran this by hand; it now runs in
+  every matrix cell.
+- Added `MANIFEST.in`. setuptools' default source distribution carried the
+  package and the tests and nothing else: no `docs/`, no `templates/`, no
+  `tools/`, no `examples/`, no changelog. That default contradicted both the
+  documented install path and the L-02 disposition below, so the sdist now
+  carries the source of the project rather than only its importable half.
+  The wheel is unchanged: only `sett*` is packaged there.
+- Added `tests/test_supported_python_versions.py`. The classifiers, the
+  `requires-python` floor, the Ruff target version, the CI matrix, the README
+  badge, and the getting-started requirements must agree. Declaring a version
+  and testing it are now one act, because doing only the first fails the
+  suite.
+- Added `docs/foreign_callers.md`, the stable contract for code SETT does not
+  own. An external tool loop reaches governance through
+  `submit(Action(action_type, payload))`, whose only types are a string and a
+  JSON-safe dictionary, so no SETT type crosses into the caller and no caller
+  type crosses into SETT. A refusal is an exception rather than a return
+  value, so a caller that discards the result still cannot proceed past it.
+- Added `examples/foreign_tool_loop.py` and `examples/governance_card.py`.
+  The first governs a dependency-free stand-in for any tool-calling framework;
+  the second exports one real run as a standalone JSON and HTML record of what
+  was permitted, what was refused, and by which layer.
+
+### Changed
+
+- Moved `SETTExecutor`, `HandlerContext`, and `current_handler_context` to
+  `sett.execution_ruler`. Their top-level and historical
+  `sett.core_ruler.executor` imports remain identical compatibility reexports.
+  Action, lifecycle, execution context/results, idempotency, and resilience
+  remain kernel contracts. Authorization establishes the new authority pillar;
+  Execution follows so the effect boundary can depend on it without a Core
+  runtime dependency on Authorization.
+- `SETTOrchestrator` accepts an optional backend and explicit persistence
+  policy. The v0.14.0 durable execution integration is deliberately limited to
+  `run_pipeline_controlled()`; other orchestrator entry points reject a
+  configured backend before application work because they do not expose audit
+  closure.
+- `SETTAgent` accepts an optional `private_memory_id`, and `PrivateMemory`
+  accepts the corresponding optional `memory_id`. Both changes are additive;
+  omitting them preserves ephemeral behavior.
+- `ExecutionResult` now carries `audit_closure`, defaulting to
+  `NOT_REQUESTED`. Existing construction and non-persistent execution retain
+  their previous status, value, and exception semantics.
+- When durable evidence is configured, trace event vocabulary and frame size
+  are bounded before a lifecycle boundary can open. Limits are 128 bytes for
+  kind and component type, 1,024 bytes for component name, 64 bytes for
+  status, 32 reason codes, 256 bytes per reason code, 4 KiB for their aggregate,
+  16 KiB for attributes, and 32 KiB for the complete frame. Omitting
+  persistence preserves the previous ephemeral event-vocabulary behavior.
+- The documented concurrency roster now contains ten narrow guarantees.
+  `InMemoryEvidenceStream`, `InMemoryStateRecordStore`, and
+  `SQLitePersistenceBackend` join the five existing components after
+  concurrent stress coverage. `InMemoryAuthorizationReceiptStore` and
+  `InMemoryAuthorizationEvidence` additionally protect atomic receipt
+  consumption and their own evidence sequence, not application policies.
+
+### Fixed
+
+- Distribution metadata now uses the PEP 639 SPDX form: `license = "MIT"`
+  and `license-files = ["LICENSE"]`, with setuptools 77 as the minimum build
+  backend. The deprecated license table and license classifier were removed
+  before their announced 2027 enforcement date; the framework's MIT license
+  and bundled license text are unchanged.
+- Release ZIP entries now declare a fixed Unix `create_system` alongside
+  their fixed timestamp and POSIX mode. A pre-release rebuild on another
+  operating system exposed identical content with different host metadata.
+  Regression coverage compares builds under both Windows and Unix defaults;
+  byte reproducibility still requires identical source bytes and a matching
+  Python/zlib compression toolchain.
+- The release builder now parses command-line arguments: `--help` prints
+  usage without writing an archive, and unknown or excess arguments fail
+  before writing. Output inside the source tree and option-like root artifacts
+  are rejected before opening the destination, preventing self-inclusion and
+  accidental packaging of an earlier `--help` artifact.
+- Corrected Convention #21's historical wording: v0.13.2 was unpublished when
+  the Pocket TTS exception was approved, but was subsequently published. The
+  exception's original rationale and scope are unchanged.
+- During joint integration, an adversarial exporter test exposed a mutable
+  action-identity gap: a callback could change the action type after handler
+  selection and cause authorization to evaluate a different route. The
+  configured authorization path now snapshots action identity before
+  callbacks, while payload copying still waits for successful route preflight.
+- Resolver payload matching now checks both structural equality and the
+  existing strict JSON reference representation. Python equality alone let
+  boolean/integer, integral-float, and signed-zero substitutions change what
+  policies inspected while the handler retained the original snapshot.
+  Local snapshot preservation remains distinct from the deliberately
+  normalized receipt fingerprint used across process boundaries.
+- Release-tooling comments no longer describe SETT as an unpublished project.
+- Generalized inherited adapter provenance notes that still named a private
+  prototype and its archive path.
+- A durable terminal whose requested metadata exceeds the frame contract now
+  records an in-contract terminal with the original outcome and
+  `audit.terminal_metadata_rejected`. It carries only framework-owned fields and
+  discarded-item counts, so invalid terminal metadata cannot leave an already
+  opened lifecycle boundary permanently unverifiable. Recovery reports expose
+  the affected terminal event IDs separately from trace completeness.
+- Completed the source-installation correction begun in v0.13.2. Optional
+  adapter module documentation, runtime dependency errors, API examples, and
+  test documentation now point to editable extras from a source checkout
+  instead of naming an unavailable PyPI package. The external adapter template
+  names the provider SDK directly because copied adapters do not belong to
+  SETT's package and cannot define SETT extras.
+- Corrected `result_digest()` documentation that described an unkeyed digest
+  as unable to reveal its input. Low-entropy outcomes can be recovered through
+  candidate guessing, and equal outcomes remain correlatable. The helper is
+  limited to idempotency comparison and is not state-integrity evidence.
+- Corrected the public ethics description: default numeric harm scoring comes
+  from `ContextAnalyzer` heuristics or a registered domain analyzer.
+  `HarmCategory` weights and the rules list are inspectable configuration
+  metadata; they do not feed the numeric score or emitted audit entries.
+- `SQLitePersistenceBackend.open()` now returns an object accepted directly by
+  `SETTOrchestrator`. The component contracts had passed independently, but an
+  inheritance mismatch made the documented integrated construction fail.
+- `import sett` failed on Python 3.10 while the project declared support for
+  it. `sett/persistence/sqlite.py` imported `typing.Self`, which exists from
+  3.11, so the entire package, not only the SQLite backend, was unimportable
+  on a declared interpreter. Nothing caught it because every test ran on 3.13.
+  See the audit-remediation section below for the support window that replaces
+  the claim and the matrix that now proves it.
+- `sett/core_ruler/lifecycle.py` carried a `# noqa: PYI034 - Python 3.10
+  support` suppression whose stated reason no longer exists. `__enter__()`
+  returns `Self` and the suppression is gone.
+- The release archive copies file bytes verbatim, so `.gitattributes` never
+  governed it: a maintainer editing on Windows could ship CRLF into an archive
+  whose reproducibility the release tooling claims. This was found by causing
+  it while preparing this release. `tests/test_build_release_zip.py` now fails
+  on any release file carrying CRLF.
+
+### Defensive and infrastructure audit remediation
+
+A defensive and infrastructure audit was run against the v0.14.0 candidate
+before release, covering defensive behavior, packaging, clean installation,
+and the new surfaces. It reported no critical or high finding, three medium
+findings, and one low finding. Every one is dispositioned here, and the
+findings keep their original identifiers so the report and this entry can be
+read against each other.
+
+- **M-01, SQLite infrastructure errors were not normalized.** Some native
+  SQLite failures escaped `SETTPersistenceError`, so an application catching
+  the framework's own structured persistence failure missed failures produced
+  by the framework's own reference backend. Opening an unwritable path raised
+  a bare `sqlite3.OperationalError`. Every backend operation now translates
+  `sqlite3.Error` into `SETTPersistenceError` with a stable
+  `persistence.sqlite.<operation>_failed` reason code, the attributable
+  `backend_id`, and the driver's exception preserved as `__cause__`. The
+  translation catches `sqlite3.Error` only, so `SETTIdempotencyConflictError`,
+  `SETTPersistenceContinuityError`, `SETTPersistencePositionError`,
+  `SETTConfigurationError`, `SETTValidationError`, and the
+  `state.record_missing` reason code keep both their types and their meaning.
+  The public message is one stable sentence and carries neither the driver's
+  text nor the database path.
+- **M-02, SQLite files were created world-readable.** Documented rather than
+  papered over. `docs/security_model.md` gains a section stating that SETT
+  sets no filesystem permissions and that protecting the bytes is the
+  deploying application's responsibility, with the modes observed on POSIX
+  and on Windows and a four-step deployment procedure. The technical point
+  that makes the guidance actionable is that the directory, not the file, is
+  the control point: the `-wal` and `-shm` sidecars belong to SQLite's
+  open/close cycle, a clean `close()` removes them, and the next `open()`
+  recreates them, so permissions applied to a sidecar do not survive a
+  restart while permissions applied to the containing directory are inherited
+  by every file SQLite later creates. No best-effort `chmod` was added,
+  because one applied at open time would miss the sidecars, would not survive
+  their recreation, and would not be an ACL policy on Windows: it would read
+  as protection while providing close to none. `PrivateMemory` now says in
+  its own docstring that its name describes an architectural position and not
+  a storage property.
+- **M-03, no automated matrix for the declared Python versions.** Closed, and
+  it immediately earned its cost. The first run on a second interpreter found
+  that `import sett` had never worked on the declared 3.10 (see Fixed). The
+  declared window is now Python 3.11 through 3.14: 3.11 is the floor the code
+  has actually required since durable persistence landed, and 3.14 is added
+  because it is current and was missing. This narrows a claim that was never
+  true rather than dropping working support, and 0.14.0 is unpublished, so no
+  installed release loses an interpreter it had. The window is now enforced
+  from both sides: CI runs it, and a test fails if the classifiers, the
+  floor, the lint target, the matrix, and the public documentation ever stop
+  agreeing.
+- **L-01, adapter messages could carry provider text.** Fixed at the single
+  point every adapter funnels through. `normalized_adapter_error()` builds
+  the public message from controlled identifiers only, so it reads
+  `azure_speech synthesize failed (authentication)` and never embeds the
+  provider's own exception text. The previous behavior truncated that text to
+  200 characters, which bounded its length and nothing else: the audit's
+  synthetic bearer token survived truncation intact and was recoverable from
+  `logger.error("%s", error)`. The provider's message is not lost; it stays
+  on `__cause__`, where a local traceback still shows it in full.
+  `bound_provider_error_message()` remains public and unchanged for an
+  application that deliberately chooses to embed bounded provider text, and
+  its docstring now records why the framework no longer does.
+- **L-02, template distribution.** The templates themselves were already in
+  this release; what was open was where they are reachable from. They are
+  repository and source-release resources: present in the checkout, the
+  release archive, and the source distribution, and deliberately absent from
+  the wheel. A template is a file you copy and edit until it is your code,
+  not a module SETT imports. Making that statement true required
+  `MANIFEST.in`, because the default sdist carried neither the templates nor
+  the documentation. `templates/README.md` states the access path, and a test
+  asserts the release archive still carries all four.
+
+Two claims in the audit's own baseline needed correcting rather than
+accepting. Ruff had not been run there, because the audit environment had no
+network to install the pinned version; it has now been run, and Ruff 0.16.0
+passes on the whole tree. And the reported 1,230 passing tests required
+`requests` to be importable, which nothing declared: on a genuinely empty
+environment 48 tests failed for a missing package rather than reporting the
+credential rules they exist to check. `requests` is now part of the `dev`
+extra, with a comment saying it is a test-environment requirement and not a
+framework dependency. The core still installs with none.
+
+### Compatibility
+
+- Persistence and authorization are opt-in and add no mandatory dependency.
+  SQLite uses the Python standard library. Existing applications that omit
+  both retain the v0.13.2 execution paths and do not need new arguments.
+- No v0.13.2 public symbol was removed or renamed. New persistence contracts
+  are stable in `sett.persistence`; recovery and integrity contracts are
+  stable in `sett.audit_ruler`. Structured persistence and audit-closure
+  exceptions are also re-exported from `sett`.
+- Supported Python versions are 3.11, 3.12, 3.13, and 3.14. `requires-python`
+  is `>=3.11`. v0.13.2 declared `>=3.10`, but `import sett` never worked
+  there once durable persistence landed, so this corrects an untrue claim
+  rather than withdrawing support that existed. An application already
+  running on 3.11 or newer needs no change.
+- `SETTAdapterError.__str__()` no longer includes provider-supplied text
+  (L-01). Structured attributes, `safe_view()`, reason codes, and `__cause__`
+  are unchanged, and no code that follows convention #13 and reads attributes
+  instead of parsing the message is affected. Code that asserted on provider
+  wording inside an adapter message must read `__cause__` instead.
+- Automatic pipeline resumption, retention, compaction, cross-namespace
+  migration, import, production secret storage, `UniversalMemory` restoration,
+  `ExecutionControlRegistry` restoration, and persistence of the existing
+  `IdempotencyStore` through this backend remain outside v0.14.0.
+
+### Validation
+
+- Full suite: 1,255 tests passing, comprising the 1,038-test v0.13.2 baseline
+  plus 193 tests for durable formats, restart recovery, audit gaps, boundary
+  dispositions, stage and private-memory state, copy-on-write migrations,
+  contract probes, SQLite reopen behavior, authorization contracts and
+  fingerprints, joint effect barriers, import compatibility, concurrency, templates,
+  release packaging, documentation, language, and confidentiality guards, plus
+  17 tests added while closing the audit findings above: SQLite infrastructure
+  error normalization and the domain failures it must not flatten, the
+  adapter message contract under the audit's own bearer-token probe, the
+  declared-versus-tested Python window, and release-archive content, plus
+  7 tests for the foreign-caller contract: the plain-type boundary, refusal
+  raised rather than returned, fail-closed unregistered and unattached paths,
+  and a guard that no agent framework is imported anywhere in `sett/`.
+- The suite passes on Python 3.11.16, 3.12.14, 3.13.15, and 3.14.7, with
+  identical results under `-W error`. Each interpreter also passes
+  `python -m ruff check .` with the pinned Ruff 0.16.0, `compileall`, and the
+  import sweep at 92/92 modules with no optional provider SDK installed.
+  These are executed results on the candidate, not a claim derived from one
+  interpreter.
+- Total coverage: 88% over roughly 8,400 executable lines. Areas most
+  affected by this release: idempotency 97%, UniversalMemory 96%, ethical
+  filter 95%, authorization store 94%, SQLite persistence 94% (up from 92%
+  after M-01), authorization fingerprint 93%, executor 92%, trace 90%,
+  migrations 78%. Migrations remain the recommended target for the next
+  focused review, because they affect durable state and carry the most
+  complex failure paths. A coverage percentage guides attention; it does not
+  by itself demonstrate defensive correctness.
+- Release checks: the wheel and the source distribution build, the wheel
+  installs into an empty virtual environment, `pip check` reports no broken
+  requirement, and `SETTOrchestrator` imports from the installed package with
+  no source tree on the path. The release archive builds and carries the
+  templates and the CI workflow.
+- Not established by this release: live provider calls against any external
+  service, an operating-system matrix beyond Linux, Windows, and one macOS
+  cell, and any measurement of the durability declarations against real power
+  loss. Those remain declarations verified from effective SQLite pragmas, not
+  physical proof.
+
 ## [0.13.2] - 2026-08-21
 
 Provider-neutral voice language consistency, audited error boundaries, and

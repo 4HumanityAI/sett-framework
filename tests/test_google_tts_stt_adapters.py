@@ -1,8 +1,8 @@
 """
 SETT Framework: Tests: GoogleTTSAdapter / GoogleSTTAdapter
 ======================================================
-google-cloud-texttospeech and google-cloud-speech are optional
-dependencies (pip install sett-framework[google-tts-stt]): this test
+google-cloud-texttospeech and google-cloud-speech are optional dependencies
+(from a source checkout, pip install -e ".[google-tts-stt]"): this test
 environment does not have them installed, matching how
 AnthropicAdapter/OpenAIAdapter/GeminiAdapter have no dedicated test
 file today (they need their real SDK to test meaningfully and this
@@ -228,7 +228,11 @@ class TestGoogleTTSAdapterSynthesize:
             adapter = GoogleTTSAdapter()
             with pytest.raises(SETTServiceAdapterError) as exc_info:
                 adapter.synthesize("hola")
-            assert "quota exceeded" in str(exc_info.value)
+            # L-01: the provider's own text is reachable through the
+            # chained cause, never through the public message.
+            assert "quota exceeded" not in str(exc_info.value)
+            assert "google_cloud_tts synthesize failed" in str(exc_info.value)
+            assert "quota exceeded" in str(exc_info.value.__cause__)
 
 
 class TestGoogleSTTAdapterTranscribe:
@@ -263,7 +267,11 @@ class TestGoogleSTTAdapterTranscribe:
             adapter = GoogleSTTAdapter()
             with pytest.raises(SETTServiceAdapterError) as exc_info:
                 adapter.transcribe(b"bad-bytes")
-            assert "bad audio encoding" in str(exc_info.value)
+            # L-01: the provider's own text is reachable through the
+            # chained cause, never through the public message.
+            assert "bad audio encoding" not in str(exc_info.value)
+            assert "google_cloud_stt transcribe failed" in str(exc_info.value)
+            assert "bad audio encoding" in str(exc_info.value.__cause__)
 
     def test_credentials_path_argument_builds_explicit_credentials(
         self, monkeypatch

@@ -6,7 +6,7 @@ LLM adapter for OpenAI's GPT models.
 Implements the LLMBase interface: fully interchangeable with
 AnthropicAdapter or GeminiAdapter.
 
-Requires: pip install sett-framework[openai]
+Requires, from a source checkout: pip install -e ".[openai]"
 """
 from __future__ import annotations
 
@@ -78,7 +78,8 @@ class OpenAIAdapter(LLMBase):
         except ImportError:
             raise SETTLLMAdapterError(
                 "The 'openai' package is required to use the OpenAIAdapter. "
-                "Install it with: pip install sett-framework[openai]",
+                "SETT installs from source; from your checkout run: "
+                "pip install -e \".[openai]\"",
                 kind=AdapterErrorKind.CONFIGURATION,
                 provider="openai",
                 adapter_name=type(self).__name__,

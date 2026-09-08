@@ -15,10 +15,15 @@ def test_concurrency_exception_roster_is_counted_and_named_consistently():
         "ExecutionControlRegistry",
         "InMemoryIdempotencyStore",
         "CircuitBreaker",
+        "InMemoryEvidenceStream",
+        "InMemoryStateRecordStore",
+        "SQLitePersistenceBackend",
+        "InMemoryAuthorizationReceiptStore",
+        "InMemoryAuthorizationEvidence",
     )
 
-    assert "with five documented exceptions" in section
-    assert "Outside of those five guarantees" in section
+    assert "with ten documented exceptions" in section
+    assert "Outside of those ten guarantees" in section
     practical = section.split("Practical implications for a deployment:", 1)[1]
     for component in exceptions:
         assert f"`{component}`" in practical

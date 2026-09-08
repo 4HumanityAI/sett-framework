@@ -27,35 +27,35 @@ def bound_provider_error_message(
     error: BaseException, *, max_length: int = DEFAULT_PROVIDER_ERROR_MAX_LENGTH
 ) -> str:
     """
-    Bound an external provider's raw exception message before it is
-    embedded in a SETT exception's public message string.
+    Bound an external provider's raw exception message.
 
     Named for what it does. It was called ``sanitize_...`` and that name
     promised redaction it never performed: a message carrying
-    ``Authorization: Bearer sk-live-...`` came out carrying it still. The
-    One honest option was to write a redactor for arbitrary third-party
+    ``Authorization: Bearer sk-live-...`` came out carrying it still. One
+    honest option was to write a redactor for arbitrary third-party
     text. That is unbounded work that produces confidence rather than safety,
     because there is always one more format it does not know. The other was to
     say plainly that this caps length and nothing else. This is the second.
 
-    If a provider's text must not appear in a public message at all, the
-    stronger move is not to embed it: raise a SETT error describing the
-    failure and keep the original as ``__cause__``, where a local
-    traceback still shows it and an exported message does not.
+    SETT no longer uses this to build its own adapter messages, and this
+    paragraph records why rather than deleting the history (#16). Adapters
+    historically embedded ``str(e)`` from the provider SDK into their own
+    error message with no limit (F29, defensive audit #2); bounding it here
+    capped the length. The v0.14.0 audit then showed what bounding never
+    addressed: an authentication header survived truncation intact and was
+    recoverable from ``str(error)``, which ordinary application logging
+    formats by default (L-01). ``normalized_adapter_error()`` now composes
+    the public message from controlled identifiers only, and the provider's
+    text stays on ``__cause__``.
 
-    LLM/service adapters (OpenAI, Anthropic, Gemini, ElevenLabs, ...)
-    historically embedded ``str(e)`` from the provider SDK directly
-    into the adapter's own error message with no limit (F29, defensive
-    audit #2). No concrete secret leak was reproduced against the real
-    SDKs, but an HTTP error body or SDK exception can be arbitrarily
-    long and is not something SETT controls the shape of; bounding it
-    here caps what an adapter error message can carry across that
-    boundary, regardless of what a given provider decides to put in
-    ``str(e)`` in the future.
-
-    The original exception is not discarded: callers should still
-    chain it with ``raise SETTLLMAdapterError(...) from error`` so it
-    remains available as ``__cause__`` for real debugging.
+    The function remains public and unchanged for an application that
+    deliberately chooses to embed bounded provider text in a message of its
+    own. That is a decision worth making explicitly, which is why it is a
+    call an application makes rather than something the framework does on
+    its behalf. If the text must not appear in a public message at all, do
+    not embed it: raise a SETT error describing the failure and keep the
+    original as ``__cause__``, where a local traceback still shows it and
+    an exported message does not.
 
     Args:
         error: The provider SDK exception that was caught.
@@ -372,13 +372,14 @@ class SETTDependencyError(SETTError):
 
 class SETTIdempotencyConflictError(SETTError):
     """
-    Raised when an idempotency key is reused with a different action
-    payload than the one it was originally reserved for.
+    Raised when an idempotent operation identity is reused for different
+    content than the content it originally reserved.
 
-    The same key with the same fingerprint is a replay or a retry, and
-    is allowed. The same key describing a *different* operation is a
-    programming error that would otherwise silently either duplicate an
-    external effect or suppress a legitimate one, so it fails closed.
+    For controlled execution the identity is an idempotency key and the
+    content is an action payload. Persistence uses the same rule for a
+    ``write_id`` and its exact bytes. The same identity and fingerprint is
+    a replay or retry and is allowed. Reusing it for different content is
+    a programming error, so it fails closed.
 
     Attributes:
         key (str | None): The idempotency key involved.
@@ -401,6 +402,83 @@ class SETTIdempotencyConflictError(SETTError):
         self.key = key
         self.expected_fingerprint = expected_fingerprint
         self.actual_fingerprint = actual_fingerprint
+
+
+class SETTPersistenceError(SETTError):
+    """Base class for structured persistence failures.
+
+    Attributes:
+        reason_code (str): Stable machine-readable failure reason.
+        backend_id (str | None): Backend that reported the failure.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        reason_code: str,
+        backend_id: str | None = None,
+    ) -> None:
+        """Preserve the attributable backend and stable reason code."""
+        super().__init__(message)
+        self.reason_code = reason_code
+        self.backend_id = backend_id
+
+
+class SETTPersistenceFormatError(SETTPersistenceError, ValueError):
+    """Raised when durable bytes violate their declared format."""
+
+
+class SETTPersistenceContinuityError(SETTPersistenceError):
+    """Raised when compare-and-append would fork an evidence stream."""
+
+
+class SETTPersistencePositionError(SETTPersistenceError, ValueError):
+    """Raised when a stream position belongs to another backend or stream."""
+
+
+class SETTAuditClosureError(SETTError):
+    """A known outcome whose requested audit closure was not established.
+
+    Retrying the underlying action is unsafe because the outcome is already
+    known. Only reconciliation or closure may be retried.
+    """
+
+    retry_safe = False
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        execution_result: object,
+        audit_closure: object,
+    ) -> None:
+        """Carry the known outcome and its independent audit state."""
+        super().__init__(message)
+        self.execution_result = execution_result
+        self.audit_closure = audit_closure
+
+
+class SETTAuthorizationError(SETTError):
+    """Base failure raised by the authorization boundary."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        reason_code: str,
+        verdict: str = "block",
+        receipt_id: str | None = None,
+    ) -> None:
+        """Preserve the stable failure reason and optional receipt identity."""
+        super().__init__(message)
+        self.reason_code = reason_code
+        self.verdict = verdict
+        self.receipt_id = receipt_id
+
+
+class SETTAuthorizationConfigurationError(SETTAuthorizationError):
+    """Authorization could not produce a trustworthy decision."""
 
 
 class SETTValidationError(SETTError, ValueError):

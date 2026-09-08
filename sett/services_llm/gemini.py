@@ -6,7 +6,7 @@ LLM adapter for Google's Gemini models.
 Implements the LLMBase interface: fully interchangeable with
 AnthropicAdapter or OpenAIAdapter.
 
-Requires: pip install sett-framework[gemini]
+Requires, from a source checkout: pip install -e ".[gemini]"
 """
 from __future__ import annotations
 
@@ -78,7 +78,8 @@ class GeminiAdapter(LLMBase):
         except ImportError:
             raise SETTLLMAdapterError(
                 "The 'google-generativeai' package is required to use GeminiAdapter. "
-                "Install it with: pip install sett-framework[gemini]",
+                "SETT installs from source; from your checkout run: "
+                "pip install -e \".[gemini]\"",
                 kind=AdapterErrorKind.CONFIGURATION,
                 provider="google_gemini",
                 adapter_name=type(self).__name__,

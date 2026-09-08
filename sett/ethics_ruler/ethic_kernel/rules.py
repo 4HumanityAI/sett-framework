@@ -1,8 +1,14 @@
 """
 SETT Framework: Ethical Rules
 ==============================
-Defines harm categories, their weights, and the evaluation thresholds
-used by the EthicalFilter.
+Defines declared harm categories and metadata, plus the thresholds and
+principle used by the EthicalFilter.
+
+Only ``EthicalRuleset.reject_threshold``, ``warn_threshold`` and
+``principle`` participate in a verdict. Rules and weights are retained
+as configuration metadata for human inspection; they do not enter the
+numeric score and are not copied into emitted audit entries. Scoring is
+owned by ``ContextAnalyzer``.
 
 Directly inspired by an early prototype's moral_eval.py: generalized into a
 reusable ruleset system that any SETT deployment can customize.
@@ -17,8 +23,10 @@ from enum import Enum
 
 class HarmCategory(Enum):
     """
-    Categories of harm that the EthicalFilter evaluates.
-    Each category has a default weight reflecting its severity.
+    Declared harm categories available for ruleset documentation.
+
+    Each category has a default metadata weight. The current numeric
+    evaluator does not consume that weight.
     """
     PHYSICAL = "physical"           # Bodily harm to a person
     PSYCHOLOGICAL = "psychological" # Emotional or mental harm
@@ -28,8 +36,8 @@ class HarmCategory(Enum):
     AMBIGUITY = "ambiguity"         # Uncertain or unclear consequences
 
 
-# Default harm weights: higher means more serious
-# These reflect the priority SETT places on human wellbeing and dignity.
+# Declared harm weights: higher means more serious to a human reader.
+# ContextAnalyzer, not this mapping, owns the numeric score.
 DEFAULT_HARM_WEIGHTS: dict[HarmCategory, float] = {
     HarmCategory.PHYSICAL: 10.0,
     HarmCategory.PSYCHOLOGICAL: 8.0,
@@ -43,8 +51,10 @@ DEFAULT_HARM_WEIGHTS: dict[HarmCategory, float] = {
 @dataclass
 class EthicalRule:
     """
-    A single ethical rule with its harm category, weight, and description.
-    Rules can be activated or deactivated at runtime.
+    Human-readable ruleset metadata with an inspectable active state.
+
+    ``active`` controls ``EthicalRuleset.get_active_rules()``. It does
+    not change the score or verdict.
     """
     name: str
     category: HarmCategory
@@ -53,25 +63,23 @@ class EthicalRule:
     active: bool = True
 
     def deactivate(self) -> None:
-        """Temporarily disable this rule."""
+        """Exclude this rule from ``get_active_rules()``."""
         self.active = False
 
     def activate(self) -> None:
-        """Re-enable this rule."""
+        """Include this rule in ``get_active_rules()`` again."""
         self.active = True
 
 
 @dataclass
 class EthicalRuleset:
     """
-    A named collection of ethical rules used by the EthicalFilter.
+    Verdict thresholds, principle, and inspectable rule metadata.
 
-    Can be customized per deployment context:
-    - Medical deployments may have stricter PHYSICAL and PSYCHOLOGICAL thresholds
-    - Enterprise deployments may focus more on ECONOMIC and AUTONOMY
-    - Educational deployments may emphasize PSYCHOLOGICAL and AUTONOMY for minors
-
-    The orchestrator and agents are aware of this ruleset through the EthicalFilter.
+    Adjust ``reject_threshold`` and ``warn_threshold`` to change verdict
+    boundaries. Adding, removing, weighting or toggling ``rules`` does
+    not change the numeric evaluation. Subclass or register a
+    ``ContextAnalyzer`` when scoring itself has to change.
     """
     name: str
     principle: str = "Do not cause direct or indirect harm to human beings."
@@ -96,9 +104,9 @@ def default_ruleset() -> EthicalRuleset:
     """
     Returns the default SETT ethical ruleset.
 
-    This ruleset covers the most fundamental ethical principles.
-    It is used automatically when no custom ruleset is provided.
-    For domain-specific deployments, extend or replace this.
+    Its metadata covers the six declared harm categories. The filter
+    uses its thresholds and principle automatically when no custom
+    ruleset is provided; ContextAnalyzer still owns the score.
     """
     ruleset = EthicalRuleset(name="sett_default")
 

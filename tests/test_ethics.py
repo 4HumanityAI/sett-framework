@@ -20,13 +20,16 @@ import pytest
 from sett import (
     EnvironmentalContext,
     EthicalFilter,
+    EthicalRule,
     EthicalRuleset,
     FilterVerdict,
+    HarmCategory,
     RiskLevel,
     RiskProfile,
     SETTEthicalFilterRejectedError,
     SETTMemoryAccessDeniedError,
     SETTValidationError,
+    default_ruleset,
 )
 from sett.ethics_ruler.ethic_kernel.context_analyzer import (
     ContextAnalyzer,
@@ -423,6 +426,51 @@ class TestEthicalFilter:
         f = EthicalFilter(ruleset=custom)
         assert f.principle == custom.principle
         assert f._ruleset.name == "permissive"
+
+    def test_rule_metadata_does_not_change_a_verdict(self):
+        """Rule metadata is inspectable but ContextAnalyzer owns scoring."""
+        action = "say hello"
+        baseline_ruleset = default_ruleset()
+        baseline_ruleset.reject_threshold = 1.0
+        baseline_ruleset.warn_threshold = 0.5
+        baseline = EthicalFilter(ruleset=baseline_ruleset).evaluate(action, {})
+
+        variants = []
+        zero_weight = default_ruleset()
+        for rule in zero_weight.rules:
+            rule.weight = 0.0
+        variants.append(zero_weight)
+
+        inactive = default_ruleset()
+        for rule in inactive.rules:
+            rule.deactivate()
+        variants.append(inactive)
+
+        variants.append(EthicalRuleset(name="empty"))
+        for ruleset in variants:
+            ruleset.reject_threshold = 1.0
+            ruleset.warn_threshold = 0.5
+            assert EthicalFilter(ruleset=ruleset).evaluate(action, {}) is baseline
+
+    def test_rule_description_is_not_copied_into_audit_evidence(self):
+        marker = "rule-description-must-remain-configuration-metadata"
+        ruleset = EthicalRuleset(
+            name="documented",
+            reject_threshold=1.0,
+            warn_threshold=0.5,
+            rules=[
+                EthicalRule(
+                    name="documented-rule",
+                    category=HarmCategory.AMBIGUITY,
+                    weight=2.0,
+                    description=marker,
+                )
+            ],
+        )
+        ethical_filter = EthicalFilter(ruleset=ruleset)
+        ethical_filter.evaluate("say hello", {})
+
+        assert marker not in repr(ethical_filter.get_audit_log())
 
     def test_principle_is_accessible(self):
         f = EthicalFilter()

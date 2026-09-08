@@ -52,7 +52,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Self
 
 from sett.audit_ruler.trace import (
     CANCEL_REQUESTED_KIND,
@@ -1130,7 +1130,7 @@ class ExecutionControl:
 
     # ── context manager ──────────────────────────────────────────────────
 
-    def __enter__(self) -> ExecutionControl:  # noqa: PYI034 - Python 3.10 support
+    def __enter__(self) -> Self:
         """Register, then verify this node may start at all.
 
         Python does not call ``__exit__()`` when ``__enter__()`` raises, so

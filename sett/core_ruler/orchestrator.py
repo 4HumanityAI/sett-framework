@@ -19,6 +19,7 @@ import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
+from sett.audit_ruler.closure import AuditClosure
 from sett.audit_ruler.trace import TraceEvent, TraceExporter, TraceRecorder
 from sett.core_ruler.agent import SETTAgent
 from sett.core_ruler.execution_context import (
@@ -33,7 +34,6 @@ from sett.core_ruler.execution_result import (
     ExecutionState,
     ExecutionStatus,
 )
-from sett.core_ruler.executor import SETTExecutor
 from sett.core_ruler.lifecycle import (
     ExecutionControl,
     ExecutionControlRegistry,
@@ -47,18 +47,29 @@ from sett.core_ruler.lifecycle import (
 from sett.ethics_ruler.ethic_kernel.filter import EthicalFilter
 from sett.exceptions import (
     SETTAgentNotFoundError,
+    SETTAuditClosureError,
     SETTCancelledError,
+    SETTConfigurationError,
     SETTError,
     SETTEthicalFilterRejectedError,
+    SETTPersistenceError,
     SETTTimeoutError,
     SETTValidationError,
 )
 from sett.memory_ruler.universal import UniversalMemory
+from sett.persistence.contracts import (
+    PersistenceBackend,
+    validate_backend_declarations,
+)
+from sett.persistence.identity import STAGE_OUTPUT_WRITE_ID_VERSION
+from sett.persistence.policy import AuditGapPolicy, PersistencePolicy
+from sett.persistence.state import persist_stage_output
 from sett.risk_ruler.environmental_context import EnvironmentalContext
 from sett.risk_ruler.risk_level import RiskLevel
 
 if TYPE_CHECKING:
     from sett.core_ruler.pipeline import PipelineResult, PipelineStep
+    from sett.execution_ruler.executor import SETTExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +92,22 @@ _PIPELINE_TERMINAL_BY_STATUS = {
     ExecutionStatus.REJECTED: "pipeline.rejected",
     ExecutionStatus.FAILED: "pipeline.failed",
 }
+
+
+class _KnownOutcomeAuditGap(BaseException):
+    """Internal control flow for a result known before audit confirmation."""
+
+    def __init__(
+        self,
+        value: Any,
+        persistence_error: SETTPersistenceError,
+        *,
+        boundary_event_id: str,
+    ) -> None:
+        super().__init__(str(persistence_error))
+        self.value = value
+        self.persistence_error = persistence_error
+        self.boundary_event_id = boundary_event_id
 
 
 class SETTOrchestrator:
@@ -106,6 +133,8 @@ class SETTOrchestrator:
         ethical_filter: EthicalFilter | None = None,
         *,
         lifecycle_policy: LifecyclePolicy | None = None,
+        persistence_backend: PersistenceBackend | None = None,
+        persistence_policy: PersistencePolicy | None = None,
     ) -> None:
         """
         Args:
@@ -116,12 +145,49 @@ class SETTOrchestrator:
                             default - imposes no timeout anywhere, so an
                             orchestrator built exactly as in v0.11.0
                             behaves exactly as it did.
+            persistence_backend: Optional durable evidence and state backend.
+                It must be supplied together with ``persistence_policy``.
+            persistence_policy: Explicit durability, integrity, and audit-gap
+                choices. It must be supplied together with the backend.
         """
+        if (persistence_backend is None) != (persistence_policy is None):
+            raise SETTValidationError(
+                "persistence_backend and persistence_policy must be supplied "
+                "together."
+            )
+        if persistence_backend is not None and not isinstance(
+            persistence_backend, PersistenceBackend
+        ):
+            raise SETTValidationError(
+                "persistence_backend must be a PersistenceBackend."
+            )
+        if persistence_policy is not None and not isinstance(
+            persistence_policy, PersistencePolicy
+        ):
+            raise SETTValidationError(
+                "persistence_policy must be a PersistencePolicy."
+            )
+        if persistence_backend is not None and persistence_policy is not None:
+            validate_backend_declarations(
+                persistence_backend,
+                snapshot_durability=persistence_policy.snapshot_durability,
+                evidence_durability=persistence_policy.evidence_durability,
+            )
         self._agents: dict[str, SETTAgent] = {}
         self._universal_memory = UniversalMemory()
         self._ethical_filter = ethical_filter or EthicalFilter()
         self._executor = None  # SETTExecutor | None: set via register_executor()
-        self._trace_recorder = TraceRecorder()
+        self._persistence_backend = persistence_backend
+        self._persistence_policy = persistence_policy
+        self._trace_recorder = (
+            TraceRecorder()
+            if persistence_backend is None or persistence_policy is None
+            else TraceRecorder(
+                evidence_stream=persistence_backend.evidence,
+                namespace_id=persistence_backend.namespace_id,
+                evidence_durability=persistence_policy.evidence_durability,
+            )
+        )
         self._last_trace_id: str | None = None
         self._lifecycle_policy = lifecycle_policy or LifecyclePolicy()
         self._control_registry = ExecutionControlRegistry()
@@ -164,6 +230,15 @@ class SETTOrchestrator:
         replaced = self._agents.get(agent.domain)
         agent.attach_universal_memory(self._universal_memory)
         agent.attach_trace_recorder(self._trace_recorder)
+        if (
+            self._persistence_backend is not None
+            and self._persistence_policy is not None
+        ):
+            agent._configure_private_memory_persistence(
+                backend=self._persistence_backend,
+                policy=self._persistence_policy,
+                trace_recorder=self._trace_recorder,
+            )
         if self._executor is not None:
             agent.attach_executor(self._executor)
         self._agents[agent.domain] = agent
@@ -252,6 +327,12 @@ class SETTOrchestrator:
         Returns:
             The result from the agent (or a dict of results from all agents).
         """
+        if self._persistence_backend is not None:
+            raise SETTConfigurationError(
+                "process() cannot expose durable audit closure. Durable "
+                "orchestrator persistence currently requires "
+                "run_pipeline_controlled()."
+            )
         if execution_context is not None and not isinstance(
             execution_context, ExecutionContext
         ):
@@ -390,6 +471,7 @@ class SETTOrchestrator:
                 input_data,
                 parent,
                 agent_context,
+                route_event,
                 agent_started,
                 agent_control,
                 _return_event,
@@ -402,6 +484,7 @@ class SETTOrchestrator:
         input_data: dict[str, Any],
         parent: ExecutionContext,
         agent_context: ExecutionContext,
+        route_event: TraceEvent,
         agent_started: TraceEvent,
         agent_control: ExecutionControl | None,
         _return_event: bool,
@@ -517,26 +600,40 @@ class SETTOrchestrator:
             except (AttributeError, TypeError):
                 pass
             raise
-        agent_completed = self._trace_recorder.record(
-            agent_context,
-            kind="agent.completed",
-            component_type="agent",
-            component_name=agent.name,
-            status="completed",
-            cause_id=(
-                self._trace_recorder.last_event_id(agent_context.run_id)
-                or agent_started.event_id
-            ),
-        )
-        route_completed = self._trace_recorder.record(
-            parent,
-            kind="route.completed",
-            component_type="orchestrator",
-            component_name=self.__class__.__name__,
-            status="completed",
-            cause_id=agent_completed.event_id,
-            attributes={"domain": domain},
-        )
+        try:
+            agent_completed = self._trace_recorder.record(
+                agent_context,
+                kind="agent.completed",
+                component_type="agent",
+                component_name=agent.name,
+                status="completed",
+                cause_id=(
+                    self._trace_recorder.last_event_id(agent_context.run_id)
+                    or agent_started.event_id
+                ),
+            )
+        except SETTPersistenceError as error:
+            raise _KnownOutcomeAuditGap(
+                result,
+                error,
+                boundary_event_id=agent_started.event_id,
+            ) from error
+        try:
+            route_completed = self._trace_recorder.record(
+                parent,
+                kind="route.completed",
+                component_type="orchestrator",
+                component_name=self.__class__.__name__,
+                status="completed",
+                cause_id=agent_completed.event_id,
+                attributes={"domain": domain},
+            )
+        except SETTPersistenceError as error:
+            raise _KnownOutcomeAuditGap(
+                result,
+                error,
+                boundary_event_id=route_event.event_id,
+            ) from error
         if _return_event:
             return result, route_completed
         return result
@@ -639,6 +736,43 @@ class SETTOrchestrator:
             return ExecutionStatus.REJECTED, "policy.reject"
         return ExecutionStatus.FAILED, "component.exception"
 
+    @staticmethod
+    def _audit_gap_for(
+        error: SETTPersistenceError,
+        *,
+        boundary_event_id: str,
+    ) -> AuditClosure:
+        """Classify only what SETT can know about failed confirmation."""
+        definitive_reasons = {
+            "audit.anchor_durability_unsatisfied",
+            "persistence.stream_continuity_conflict",
+            "state.output_not_serializable",
+            "state.snapshot_durability_unsatisfied",
+        }
+        if error.reason_code in definitive_reasons:
+            return AuditClosure.unsatisfied(
+                boundary_event_id=boundary_event_id,
+            )
+        return AuditClosure.unconfirmed(
+            boundary_event_id=boundary_event_id,
+        )
+
+    def _apply_audit_gap_policy(
+        self,
+        result: ExecutionResult[Any],
+    ) -> ExecutionResult[Any]:
+        """Return or escalate a known outcome according to explicit policy."""
+        policy = self._persistence_policy
+        if policy is None:
+            return result
+        if policy.audit_gap_policy is AuditGapPolicy.RETURN_KNOWN_OUTCOME:
+            return result
+        raise SETTAuditClosureError(
+            "Execution completed, but requested audit closure was not established.",
+            execution_result=result,
+            audit_closure=result.audit_closure,
+        )
+
     def process_controlled(
         self,
         input_data: dict[str, Any],
@@ -681,6 +815,12 @@ class SETTOrchestrator:
             An ExecutionResult carrying the agent result on success, or the
             structured reason it stopped.
         """
+        if self._persistence_backend is not None:
+            raise SETTConfigurationError(
+                "process_controlled() does not yet persist domain outputs. "
+                "Durable orchestrator persistence currently requires "
+                "run_pipeline_controlled()."
+            )
         if execution_context is not None and not isinstance(
             execution_context, ExecutionContext
         ):
@@ -1059,6 +1199,11 @@ class SETTOrchestrator:
         )
         from sett.exceptions import SETTConfigurationError
 
+        if self._persistence_backend is not None:
+            raise SETTConfigurationError(
+                "run_pipeline() cannot expose durable audit closure. Use "
+                "run_pipeline_controlled() when persistence is configured."
+            )
         if execution_context is not None and not isinstance(
             execution_context, ExecutionContext
         ):
@@ -1418,6 +1563,8 @@ class SETTOrchestrator:
         skip_cause: SkipCause | None = None
         stop_error: BaseException | None = None
         prev_output: dict[str, Any] | None = None
+        normalized: list[PipelineStep] = []
+        audit_gap: AuditClosure | None = None
         pipeline_context = root.derive()
 
         try:
@@ -1433,7 +1580,14 @@ class SETTOrchestrator:
                     component_name="native_pipeline",
                     status="started",
                     cause_id=trace_started.event_id,
-                    attributes={"stage_count": len(steps)},
+                    attributes={
+                        "stage_count": len(steps),
+                        **(
+                            {"write_id_version": STAGE_OUTPUT_WRITE_ID_VERSION}
+                            if self._persistence_backend is not None
+                            else {}
+                        ),
+                    },
                 )
                 last_pipeline_event_id = pipeline_started.event_id
                 pipeline_control = root_control.child(context=pipeline_context)
@@ -1450,7 +1604,6 @@ class SETTOrchestrator:
 
                     # Whole pipeline validated before any stage runs, so a
                     # misconfiguration cannot produce partial side effects.
-                    normalized: list[PipelineStep] = []
                     for raw_step in steps:
                         if isinstance(raw_step, PipelineStep):
                             step = raw_step
@@ -1545,6 +1698,23 @@ class SETTOrchestrator:
                                     _return_event=True,
                                 )
                                 stage_control.checkpoint()
+                        except _KnownOutcomeAuditGap as gap:
+                            result = gap.value
+                            completed_units += 1
+                            outcomes.append(
+                                StageOutcome(
+                                    domain=step.domain,
+                                    status="completed",
+                                    output=result,
+                                    execution_status=ExecutionStatus.SUCCESS,
+                                )
+                            )
+                            prev_output = result
+                            audit_gap = self._audit_gap_for(
+                                gap.persistence_error,
+                                boundary_event_id=gap.boundary_event_id,
+                            )
+                            break
                         except (SETTCancelledError, SETTTimeoutError) as error:
                             cancelled = isinstance(error, SETTCancelledError)
                             stop_error = error
@@ -1661,6 +1831,44 @@ class SETTOrchestrator:
                                 pass
                             raise
 
+                        state_descriptor = None
+                        if (
+                            self._persistence_backend is not None
+                            and self._persistence_policy is not None
+                        ):
+                            try:
+                                state_descriptor = persist_stage_output(
+                                    result,
+                                    store=self._persistence_backend.state,
+                                    namespace_id=(
+                                        self._persistence_backend.namespace_id
+                                    ),
+                                    trace_id=stage_context.trace_id,
+                                    run_id=stage_context.run_id,
+                                    stage_index=index,
+                                    integrity_policy=(
+                                        self._persistence_policy.integrity_policy
+                                    ),
+                                    required_durability=(
+                                        self._persistence_policy.snapshot_durability
+                                    ),
+                                )
+                            except SETTPersistenceError as error:
+                                completed_units += 1
+                                outcomes.append(
+                                    StageOutcome(
+                                        domain=step.domain,
+                                        status="completed",
+                                        output=result,
+                                        execution_status=ExecutionStatus.SUCCESS,
+                                    )
+                                )
+                                prev_output = result
+                                audit_gap = self._audit_gap_for(
+                                    error,
+                                    boundary_event_id=stage_started.event_id,
+                                )
+                                break
                         completed_units += 1
                         outcomes.append(
                             StageOutcome(
@@ -1670,36 +1878,70 @@ class SETTOrchestrator:
                                 execution_status=ExecutionStatus.SUCCESS,
                             )
                         )
-                        stage_completed = self._trace_recorder.record(
-                            stage_context,
-                            kind="pipeline.stage_completed",
-                            component_type="pipeline_stage",
-                            component_name=step.domain,
-                            status="completed",
-                            cause_id=route_terminal.event_id,
-                            attributes={"index": index},
-                        )
+                        try:
+                            stage_completed = self._trace_recorder.record(
+                                stage_context,
+                                kind="pipeline.stage_completed",
+                                component_type="pipeline_stage",
+                                component_name=step.domain,
+                                status="completed",
+                                cause_id=route_terminal.event_id,
+                                attributes=(
+                                    {"index": index}
+                                    if state_descriptor is None
+                                    else state_descriptor.trace_attributes()
+                                ),
+                            )
+                        except SETTPersistenceError as error:
+                            prev_output = result
+                            audit_gap = self._audit_gap_for(
+                                error,
+                                boundary_event_id=stage_started.event_id,
+                            )
+                            break
                         last_pipeline_event_id = stage_completed.event_id
                         prev_output = result
 
-                    status, reason_code = self._pipeline_status(
-                        stop_error, completed_units
-                    )
-                    pipeline_terminal = self._trace_recorder.record(
-                        pipeline_context,
-                        kind=_PIPELINE_TERMINAL_BY_STATUS[status],
-                        component_type="pipeline",
-                        component_name="native_pipeline",
-                        status=status.value,
-                        cause_id=last_pipeline_event_id,
-                        reason_codes=(
-                            () if reason_code is None else (reason_code,)
-                        ),
-                        attributes={
-                            "completed_units": completed_units,
-                            "total_units": len(normalized),
-                        },
-                    )
+                    if audit_gap is not None:
+                        for skipped in normalized[len(outcomes) :]:
+                            outcomes.append(
+                                StageOutcome(
+                                    domain=skipped.domain,
+                                    status="skipped",
+                                    reason_code="audit.boundary_unresolved",
+                                )
+                            )
+                        status = (
+                            ExecutionStatus.SUCCESS
+                            if completed_units == len(normalized)
+                            else ExecutionStatus.PARTIAL
+                        )
+                        reason_code = None
+                    else:
+                        status, reason_code = self._pipeline_status(
+                            stop_error, completed_units
+                        )
+                        try:
+                            pipeline_terminal = self._trace_recorder.record(
+                                pipeline_context,
+                                kind=_PIPELINE_TERMINAL_BY_STATUS[status],
+                                component_type="pipeline",
+                                component_name="native_pipeline",
+                                status=status.value,
+                                cause_id=last_pipeline_event_id,
+                                reason_codes=(
+                                    () if reason_code is None else (reason_code,)
+                                ),
+                                attributes={
+                                    "completed_units": completed_units,
+                                    "total_units": len(normalized),
+                                },
+                            )
+                        except SETTPersistenceError as error:
+                            audit_gap = self._audit_gap_for(
+                                error,
+                                boundary_event_id=pipeline_started.event_id,
+                            )
         except (KeyboardInterrupt, SystemExit, GeneratorExit):
             # As in process_controlled(): not a stopped run, propagate.
             raise
@@ -1764,6 +2006,11 @@ class SETTOrchestrator:
                 trace_id=root.trace_id,
                 run_id=root.run_id,
                 value=partial_result,
+                audit_closure=(
+                    AuditClosure.satisfied()
+                    if self._persistence_backend is not None
+                    else AuditClosure.not_requested()
+                ),
             )
 
         completed = status is ExecutionStatus.SUCCESS
@@ -1773,18 +2020,28 @@ class SETTOrchestrator:
             output=prev_output if completed else None,
             rejection=rejection,
         )
-        self._trace_recorder.record(
-            root,
-            kind=(
-                "trace.completed"
-                if status in (ExecutionStatus.SUCCESS, ExecutionStatus.PARTIAL)
-                else _TRACE_TERMINAL_BY_STATUS.get(status, "trace.failed")
-            ),
-            component_type="orchestrator",
-            component_name=self.__class__.__name__,
-            status=status.value,
-            cause_id=pipeline_terminal.event_id,
-        )
+        if audit_gap is None:
+            try:
+                self._trace_recorder.record(
+                    root,
+                    kind=(
+                        "trace.completed"
+                        if status
+                        in (ExecutionStatus.SUCCESS, ExecutionStatus.PARTIAL)
+                        else _TRACE_TERMINAL_BY_STATUS.get(
+                            status, "trace.failed"
+                        )
+                    ),
+                    component_type="orchestrator",
+                    component_name=self.__class__.__name__,
+                    status=status.value,
+                    cause_id=pipeline_terminal.event_id,
+                )
+            except SETTPersistenceError as error:
+                audit_gap = self._audit_gap_for(
+                    error,
+                    boundary_event_id=trace_started.event_id,
+                )
         state = self._finish_state(
             root_control,
             status,
@@ -1792,12 +2049,35 @@ class SETTOrchestrator:
             completed_units=completed_units,
             total_units=len(normalized),
         )
+        if audit_gap is not None:
+            if completed:
+                gap_result = ExecutionResult.success(
+                    pipeline_result,
+                    state=state,
+                    trace_id=root.trace_id,
+                    run_id=root.run_id,
+                    audit_closure=audit_gap,
+                )
+            else:
+                gap_result = ExecutionResult(
+                    state=state,
+                    trace_id=root.trace_id,
+                    run_id=root.run_id,
+                    value=pipeline_result,
+                    audit_closure=audit_gap,
+                )
+            return self._apply_audit_gap_policy(gap_result)
         if completed:
             return ExecutionResult.success(
                 pipeline_result,
                 state=state,
                 trace_id=root.trace_id,
                 run_id=root.run_id,
+                audit_closure=(
+                    AuditClosure.satisfied()
+                    if self._persistence_backend is not None
+                    else AuditClosure.not_requested()
+                ),
             )
         return ExecutionResult.failure(
             stop_error
@@ -1806,6 +2086,11 @@ class SETTOrchestrator:
             trace_id=root.trace_id,
             run_id=root.run_id,
             value=pipeline_result,
+            audit_closure=(
+                AuditClosure.satisfied()
+                if self._persistence_backend is not None
+                else AuditClosure.not_requested()
+            ),
         )
 
     @staticmethod

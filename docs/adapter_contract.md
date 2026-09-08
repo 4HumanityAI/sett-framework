@@ -69,6 +69,11 @@ status, retryability, retry delay, capability, and reason code. `safe_view()`
 excludes raw messages and exception causes. Normalization preserves the
 original provider exception as `__cause__`.
 
+The normalized public message is composed only of controlled identifiers
+(provider, operation, category, protocol status). Provider-supplied text is
+never part of `str(error)`; it is reachable only through `__cause__`. See
+`docs/adapters.md` for the logging consequence.
+
 Lifecycle exceptions keep their own types and are never translated into a
 provider error.
 

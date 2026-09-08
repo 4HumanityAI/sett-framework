@@ -22,7 +22,6 @@ from sett.exceptions import (
     SETTCancelledError,
     SETTTimeoutError,
     SETTValidationError,
-    bound_provider_error_message,
 )
 
 JsonScalar: TypeAlias = str | int | float | bool | None
@@ -392,7 +391,24 @@ def normalized_adapter_error(
     status_code: int | None = None,
     reason_code: str | None = None,
 ) -> SETTAdapterError:
-    """Create one structured adapter error while retaining the real cause."""
+    """Create one structured adapter error while retaining the real cause.
+
+    The public message is built only from values SETT controls: the
+    provider label, the operation, the neutral error category, and the
+    protocol status. The provider's own exception text is never part of
+    it (L-01, defensive and infrastructure audit of v0.14.0). Truncating
+    that text, which is what this function used to do, bounded its length
+    and nothing else, so ``logger.error("%s", error)`` in ordinary
+    application code still exported whatever the provider had put in
+    ``str(e)``: an audit probe recovered a bearer token that way.
+
+    Nothing is lost for debugging. The original exception is chained, so
+    a local traceback still shows the provider's message in full, and
+    ``safe_view()`` continues to expose the structured facts. What
+    changed is that reaching the provider's text now requires the
+    traceback, which is a deliberate diagnostic act, rather than
+    happening by default in any log line that formats the exception.
+    """
     status = provider_status_code(error) if status_code is None else status_code
     resolved_kind = kind or adapter_error_kind_for_status(status)
     retryable: bool | None
@@ -411,11 +427,8 @@ def normalized_adapter_error(
         retryable = None
     code = reason_code or f"adapter.{resolved_kind.value}"
     status_suffix = "" if status is None else f", status {status}"
-    bounded_detail = bound_provider_error_message(error)
-    detail_suffix = "" if not bounded_detail else f": {bounded_detail}"
     return error_type(
-        f"{provider} {operation} failed "
-        f"({resolved_kind.value}{status_suffix}){detail_suffix}",
+        f"{provider} {operation} failed ({resolved_kind.value}{status_suffix})",
         kind=resolved_kind,
         provider=provider,
         adapter_name=adapter_name,

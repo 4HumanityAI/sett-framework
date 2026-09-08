@@ -32,12 +32,44 @@ if not any(
 ):
     _sett_logger.addHandler(_logging.NullHandler())
 
-__version__ = "0.13.2"
+__version__ = "0.14.0"
 __author__ = "Eduardo Daniel Viñales"
 __license__ = "MIT"
 
 # Core building blocks
 from sett.audit_ruler.trace import TraceEvent, TraceRecorder
+from sett.authorization_ruler import (
+    ApprovalInput,
+    ApprovalRequirement,
+    ApprovalVerifier,
+    AuthorizationClock,
+    AuthorizationConstraint,
+    AuthorizationDecision,
+    AuthorizationEvent,
+    AuthorizationEvidenceSink,
+    AuthorizationFingerprintPolicy,
+    AuthorizationOutcome,
+    AuthorizationPolicy,
+    AuthorizationReceipt,
+    AuthorizationReceiptStore,
+    AuthorizationRequest,
+    AuthorizationRequestResolver,
+    AuthorizationRuler,
+    AuthorizationVerdict,
+    ExecutionMode,
+    FieldTrust,
+    FieldValue,
+    InMemoryAuthorizationEvidence,
+    InMemoryAuthorizationReceiptStore,
+    PolicyDecision,
+    ReceiptUse,
+    StrictJSONAuthorizationFingerprint,
+    SystemAuthorizationClock,
+    VerifiedApproval,
+    additional_authority_may_be_evaluated,
+    permits_effect,
+    validate_verdict_semantics,
+)
 
 # Biometric system
 from sett.biometric_ruler.biometric_reading import BiometricReading
@@ -68,11 +100,6 @@ from sett.core_ruler.execution_result import (
     ExecutionResult,
     ExecutionState,
     ExecutionStatus,
-)
-from sett.core_ruler.executor import (
-    HandlerContext,
-    SETTExecutor,
-    current_handler_context,
 )
 from sett.core_ruler.expert import SETTExpert
 from sett.core_ruler.idempotency import (
@@ -135,6 +162,9 @@ from sett.ethics_ruler.ethic_kernel.rules import (
 from sett.exceptions import (
     SETTAdapterError,
     SETTAgentNotFoundError,
+    SETTAuditClosureError,
+    SETTAuthorizationConfigurationError,
+    SETTAuthorizationError,
     SETTCancelledError,
     SETTConfigurationError,
     SETTDependencyError,
@@ -145,9 +175,18 @@ from sett.exceptions import (
     SETTIdempotencyConflictError,
     SETTLLMAdapterError,
     SETTMemoryAccessDeniedError,
+    SETTPersistenceContinuityError,
+    SETTPersistenceError,
+    SETTPersistenceFormatError,
+    SETTPersistencePositionError,
     SETTServiceAdapterError,
     SETTTimeoutError,
     SETTValidationError,
+)
+from sett.execution_ruler.executor import (
+    HandlerContext,
+    SETTExecutor,
+    current_handler_context,
 )
 from sett.memory_ruler.private import PrivateMemory
 
@@ -205,6 +244,37 @@ __all__ = [  # noqa: RUF022
     "ExecutionResult",
     "ExecutionState",
     "ExecutionStatus",
+    # Authorization
+    "ApprovalInput",
+    "ApprovalRequirement",
+    "ApprovalVerifier",
+    "AuthorizationClock",
+    "AuthorizationConstraint",
+    "AuthorizationDecision",
+    "AuthorizationEvent",
+    "AuthorizationEvidenceSink",
+    "AuthorizationFingerprintPolicy",
+    "AuthorizationOutcome",
+    "AuthorizationPolicy",
+    "AuthorizationReceipt",
+    "AuthorizationReceiptStore",
+    "AuthorizationRequest",
+    "AuthorizationRequestResolver",
+    "AuthorizationRuler",
+    "AuthorizationVerdict",
+    "ExecutionMode",
+    "FieldTrust",
+    "FieldValue",
+    "InMemoryAuthorizationEvidence",
+    "InMemoryAuthorizationReceiptStore",
+    "PolicyDecision",
+    "ReceiptUse",
+    "StrictJSONAuthorizationFingerprint",
+    "SystemAuthorizationClock",
+    "VerifiedApproval",
+    "additional_authority_may_be_evaluated",
+    "permits_effect",
+    "validate_verdict_semantics",
     # Idempotency and retries
     "HandlerContext",
     "current_handler_context",
@@ -281,4 +351,11 @@ __all__ = [  # noqa: RUF022
     "SETTTimeoutError",
     "SETTDependencyError",
     "SETTIdempotencyConflictError",
+    "SETTPersistenceError",
+    "SETTPersistenceFormatError",
+    "SETTPersistenceContinuityError",
+    "SETTPersistencePositionError",
+    "SETTAuditClosureError",
+    "SETTAuthorizationError",
+    "SETTAuthorizationConfigurationError",
 ]

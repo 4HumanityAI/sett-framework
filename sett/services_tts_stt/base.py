@@ -38,8 +38,8 @@ class TTSBase(ABC):
     - synthesize(): text in, audio bytes out.
 
     Deliberately does NOT play audio, write files, or touch any UI:
-    that is an application-layer concern (see the recovered
-    Virtual-assistant-1st-attempt Speaker/Listener classes for why:
+    that is an application-layer concern (see an early prototype's
+    recovered Speaker/Listener classes for why:
     they mixed playback and UI updates into the adapter itself, which
     is exactly the coupling this interface avoids). Returning raw
     bytes keeps the adapter a pure function, testable without a

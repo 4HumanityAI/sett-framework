@@ -156,7 +156,8 @@ class PocketTTSAdapter(TTSBase):
             except ImportError as error:
                 raise SETTServiceAdapterError(
                     "The 'pocket-tts' package is required to use PocketTTSAdapter. "
-                    "Install it with: pip install sett-framework[pocket-tts]",
+                    "SETT installs from source; from your checkout run: "
+                    "pip install -e \".[pocket-tts]\"",
                     kind=AdapterErrorKind.CONFIGURATION,
                     provider="pocket-tts",
                     adapter_name=type(self).__name__,

@@ -67,6 +67,22 @@ fields include provider, operation, category, status, retryability, and a
 stable reason code. `safe_view()` deliberately excludes raw messages and
 causes.
 
+Since v0.14.0, the public message is built only from values SETT controls:
+the provider label, the operation, the neutral error category, and the
+protocol status. It reads `azure_speech synthesize failed (authentication)`
+and never carries the provider's own exception text. Earlier releases
+embedded that text truncated to 200 characters, which bounded its length
+and nothing else, so `logger.error("%s", error)` exported whatever the
+provider had put in `str(e)`.
+
+The provider's message is not discarded. It remains on `__cause__`, so a
+local traceback still shows it in full. That is the intended asymmetry:
+formatting an adapter error is safe by default, and reading the provider's
+text is a deliberate diagnostic act. `logger.exception(...)` and any other
+traceback-printing call still export the chain, so a deployment that must
+not log provider text at all should log `error.safe_view()` and catch
+adapter failures before an uncaught traceback is written.
+
 Retries and circuit breaking are opt-in through
 `execute_with_resilience()`. No retry occurs without a `RetryPolicy` and an
 explicit `operation_is_idempotent=True`. A `CircuitBreaker` is per instance;

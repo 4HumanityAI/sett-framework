@@ -31,7 +31,7 @@ just because a result was published to universal memory:
 - submit_action(): stronger, structural guarantee via a registered
   SETTExecutor. The agent never touches the real client; it only
   describes intent as an Action. Requires an Executor with a handler
-  registered for that action_type. See sett/core_ruler/executor.py.
+  registered for that action_type. See sett/execution_ruler/executor.py.
 
 Both are supported and not mutually exclusive: use propose_action() for
 quick/low-stakes effects, submit_action() for the ones where "the
@@ -56,7 +56,7 @@ from sett.memory_ruler.private import PrivateMemory
 
 if TYPE_CHECKING:
     from sett.audit_ruler.trace import TraceRecorder
-    from sett.core_ruler.executor import SETTExecutor
+    from sett.execution_ruler.executor import SETTExecutor
     from sett.memory_ruler.universal import UniversalMemory
     from sett.risk_ruler.risk_profile import RiskProfile
 
@@ -96,12 +96,20 @@ class SETTAgent(ABC):
     either propose_action() or submit_action() (see module docstring).
     """
 
-    def __init__(self, name: str, domain: str) -> None:
+    def __init__(
+        self,
+        name: str,
+        domain: str,
+        *,
+        private_memory_id: str | None = None,
+    ) -> None:
         """
         Args:
             name: A human-readable name for this agent (e.g., "HealthAgent").
             domain: The domain key used by the orchestrator to route input to this
                     agent (e.g., "health", "communications", "schedule").
+            private_memory_id: Optional stable, opaque identity that opts this
+                agent's private memory into configured persistence.
 
         Raises:
             SETTValidationError: If name or domain is not a non-empty,
@@ -123,7 +131,10 @@ class SETTAgent(ABC):
             )
         self.name = name
         self.domain = domain
-        self._private_memory = PrivateMemory(owner=self.name)
+        self._private_memory = PrivateMemory(
+            owner=self.name,
+            memory_id=private_memory_id,
+        )
         self._experts: dict[str, SETTExpert] = {}
         self._universal_memory: UniversalMemory | None = None
 
@@ -183,6 +194,22 @@ class SETTAgent(ABC):
         self._trace_recorder = recorder
         for expert in self._experts.values():
             expert._attach_trace_recorder(recorder)
+
+    def _configure_private_memory_persistence(
+        self,
+        *,
+        backend,
+        policy,
+        trace_recorder: TraceRecorder,
+    ) -> None:
+        """Connect explicitly identified private memory to durable storage."""
+        if self._private_memory.memory_id is None:
+            return
+        self._private_memory.configure_persistence(
+            backend=backend,
+            policy=policy,
+            trace_recorder=trace_recorder,
+        )
 
     def attach_universal_memory(self, memory: UniversalMemory) -> None:
         """
