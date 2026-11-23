@@ -5,6 +5,17 @@ and why: the sanitized causal trace, the tamper-evident chain state, and
 the ethical verdicts, in a form a reader can inspect without installing
 SETT or running anything.
 
+The authorization path in this example is deliberately held.
+AuthorizationRuler now requires an injected PolicyRuler, and before it
+issues a receipt it needs a complete verified-state record from the
+condition, consent, review and durability producers. This example
+configures none of them, and there is no public writer for those slots,
+so every governed effect below is refused with
+``authorization.policy_evaluation_incomplete``. That refusal is the point
+of the example: the card records exactly which gate stopped the effect,
+and an incomplete governance configuration fails closed rather than
+falling back to an ungoverned path.
+
 The scenario deliberately uses a foreign-shaped caller. Nothing here
 imports a third-party agent framework, and SETT imports none: the caller
 below is an ordinary function that hands SETT an Action, which is the
@@ -42,9 +53,18 @@ from sett import (
     SETTExpert,
     SETTOrchestrator,
     StrictJSONAuthorizationFingerprint,
+    SystemAuthorizationClock,
     __version__,
 )
+from sett.authorization_ruler import (
+    PolicyApplicability,
+    PolicyApplicabilityState,
+    PolicyBinding,
+    PolicyOrigin,
+    PolicySelection,
+)
 from sett.ethics_ruler.ethic_kernel.rules import default_ruleset
+from sett.policy_ruler import PolicyRuler
 
 
 class ThresholdExpert(SETTExpert):
@@ -81,10 +101,12 @@ class PaymentLimitPolicy:
         amount = request.payload_copy().get("amount", 0)
         if isinstance(amount, int) and amount > self.LIMIT:
             return PolicyDecision.deny(
-                self.policy_id, reason_codes=("policy.amount_above_limit",)
+                self.policy_id, reason_codes=("policy.amount_above_limit",), conditions=(),
+                review_obligations=(),
             )
         return PolicyDecision.grant(
-            self.policy_id, reason_codes=("policy.amount_within_limit",)
+            self.policy_id, reason_codes=("policy.amount_within_limit",), conditions=(),
+            review_obligations=(),
         )
 
 
@@ -94,7 +116,73 @@ class AlwaysGrantPolicy:
     policy_id = "policy.permitted_by_role"
 
     def evaluate(self, request: AuthorizationRequest, verified_approvals: frozenset) -> PolicyDecision:
-        return PolicyDecision.grant(self.policy_id, reason_codes=("policy.role_allows",))
+        return PolicyDecision.grant(self.policy_id, reason_codes=("policy.role_allows",), conditions=(), review_obligations=())
+
+
+def declared_binding(policy_id: str) -> PolicyBinding:
+    """Describe one registered policy's version and declared provenance.
+
+    An internally defined requirement uses an explicit absent source. No
+    institutional citation is invented to fill the field.
+    """
+    return PolicyBinding(
+        policy_id=policy_id,
+        policy_version="1.0",
+        contract_version="2.0",
+        origins=[
+            PolicyOrigin(
+                requirement_id="requirement.internal_payment_control",
+                requirement_revision="1",
+                layer_id="layer.application",
+                source=None,
+                source_absence_reason="Internal control defined by this deployment",
+            )
+        ],
+        profile_id=None,
+        profile_revision=None,
+    )
+
+
+class ActionSelectionResolver:
+    """Declare, per action type, which policies govern that exact action.
+
+    The application owns this declaration. SETT validates it; it cannot
+    discover an obligation the application never declared and it does not
+    determine applicable law.
+    """
+
+    resolver_id = "resolver.local_session"
+
+    def __init__(self, policies: Mapping[str, str]) -> None:
+        """Bind one required policy identifier to each governed action type."""
+        self.policies = dict(policies)
+
+    def resolve(self, request: AuthorizationRequest) -> PolicySelection:
+        """Return the declared selection for one exact action invocation."""
+        policy_id = self.policies[request.action_type]
+        item = declared_binding(policy_id)
+        return PolicySelection(
+            selection_id="selection.local",
+            selection_revision="1",
+            contract_version="2.0",
+            authority_ref="authority.local_deployment",
+            effective_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            action_id=request.action_id,
+            action_type=request.action_type,
+            required=[item],
+            informative=[],
+            applicability=[
+                PolicyApplicability(
+                    policy_id=item.policy_id,
+                    policy_version=item.policy_version,
+                    state=PolicyApplicabilityState.APPLIES,
+                    justification="Declared by this deployment for this action",
+                    fact_names=[],
+                    evidence_refs=[],
+                )
+            ],
+            facts={},
+        )
 
 
 class SessionResolver:
@@ -140,15 +228,41 @@ def build() -> tuple[SETTOrchestrator, SETTExecutor]:
     ruleset = default_ruleset()
     ruleset.reject_threshold = 2.0
     ruleset.warn_threshold = 1.0
+    clock = SystemAuthorizationClock()
+    evidence = InMemoryAuthorizationEvidence()
+    policy_ruler = PolicyRuler(
+        ruler_id="policy.local",
+        entry_checkpoint_id="checkpoint.authorization_entry",
+        evaluation_ttl_seconds=60,
+        max_live_evaluations=64,
+        clock=clock,
+        evidence_sink=evidence,
+        selection_resolver=ActionSelectionResolver(
+            {
+                "record_payment": PaymentLimitPolicy.policy_id,
+                "delete all the user's savings": AlwaysGrantPolicy.policy_id,
+            }
+        ),
+    )
     ruler = AuthorizationRuler(
         issuer_id="issuer.local",
         receipt_ttl_seconds=60,
         fingerprint_policy=StrictJSONAuthorizationFingerprint(),
         receipt_store=InMemoryAuthorizationReceiptStore(),
-        evidence_sink=InMemoryAuthorizationEvidence(),
+        evidence_sink=evidence,
+        clock=clock,
+        policy_ruler=policy_ruler,
     )
-    ruler.register_policy("record_payment", PaymentLimitPolicy())
-    ruler.register_policy("delete all the user's savings", AlwaysGrantPolicy())
+    ruler.register_policy(
+        "record_payment",
+        PaymentLimitPolicy(),
+        binding=declared_binding(PaymentLimitPolicy.policy_id),
+    )
+    ruler.register_policy(
+        "delete all the user's savings",
+        AlwaysGrantPolicy(),
+        binding=declared_binding(AlwaysGrantPolicy.policy_id),
+    )
     executor = SETTExecutor(
         authorization_ruler=ruler,
         authorization_request_resolver=SessionResolver(),
@@ -206,19 +320,19 @@ def run() -> dict[str, Any]:
         "payment within the policy limit",
         "record_payment",
         {"amount": 120},
-        "authorization policy, then ethical filter",
+        "authorization handoff (held: verified-state producers are missing)",
     )
     attempt(
         "payment above the policy limit",
         "record_payment",
         {"amount": 5000},
-        "authorization policy (deterministic)",
+        "authorization handoff (held: verified-state producers are missing)",
     )
     attempt(
         "authorized but harmful effect",
         "delete all the user's savings",
         {"confirm": True},
-        "ethical filter (authority was granted)",
+        "authorization handoff (held: verified-state producers are missing)",
     )
 
     trace = orchestrator.export_trace(traced.trace_id, view="sanitized")
@@ -229,9 +343,17 @@ def run() -> dict[str, Any]:
         "framework": {"name": "SETT", "version": __version__},
         "scenario": {
             "description": (
-                "A foreign tool loop routes two effects through SETT. One is "
-                "permitted and one is refused. SETT imports nothing from the "
+                "A foreign tool loop routes three effects through SETT. In "
+                "this example the authorization handoff is held: the "
+                "condition, consent, review and durability producers it "
+                "requires are not configured, so every governed effect is "
+                "refused before its handler. SETT imports nothing from the "
                 "caller; the caller hands it an Action."
+            ),
+            "authorization_status": (
+                "held; no receipt can be issued without the condition, "
+                "consent, review and durability producers, which this "
+                "example does not configure"
             ),
             "domain": "payments",
             "reject_threshold": 1.0,

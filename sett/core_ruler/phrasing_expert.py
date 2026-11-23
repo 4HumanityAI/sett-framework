@@ -4,22 +4,16 @@ SETT Framework: PhrasingExpert
 Base class for any expert whose job includes producing text the user
 will actually read or hear.
 
-This formalizes a pattern that emerged independently twice while
-building a companion-assistant prototype on top of SETT (its greeting expert, and its
-weather-question acknowledgment): before either one was planned as a
-reusable pattern. That repetition, unplanned, is the signal that this
-belongs in the framework itself, not copy-pasted per project.
-
 The contract:
 
     1. Deterministic logic produces the FACTS (a dict). This never
        involves the LLM: implement determine_facts().
-    2. The LLM (optional) only PHRASES those facts: it never invents
-       them, never alters them, never decides what's true. Implement
-       build_prompt() to describe what the LLM should say, based only
-       on the facts already computed.
-    3. Without an LLM, or if the adapter fails for any reason, falls
-       back to a deterministic text: implement fallback_text(). The
+    2. The LLM (optional) is intended to PHRASE those facts. This
+       intention does not guarantee factual output. Implement
+       build_prompt() to select the input and verify_facts() when
+       the application requires output validation.
+    3. Without an LLM, with empty output, or on SETTLLMAdapterError,
+       falls back to deterministic text: implement fallback_text(). The
        LLM is an enhancement, never a requirement for this expert to
        do its job.
     4. Optionally, once the LLM HAS produced text, verify it against
@@ -30,15 +24,9 @@ The contract:
     5. The result is RETURNED to the owning Agent; a PhrasingExpert
        never publishes anything itself: same as every SETTExpert.
 
-v0.10.0 added step 4 (verify_facts()), for the same reason the whole
-class exists: it emerged independently twice more in that same
-downstream project (a greeting that must never contradict the real
-time of day, and a reply that must never assert the wrong name for the
-user), each time as a full override of resolve() just to insert one
-check after the LLM already answered. That repetition, the same
-signal that created this class in the first place, is why the hook is
-now part of the contract instead of something every subclass has to
-reinvent by breaking it.
+v0.10.0 added step 4 (verify_facts()), so that a subclass can check the
+phrased text against facts it already knows without overriding
+resolve().
 """
 from __future__ import annotations
 
@@ -70,13 +58,13 @@ class PhrasingExpert(SETTExpert):
 
         build_prompt(facts, context) -> str
             Describes, in natural language, what the LLM should say
-            based on the facts already computed. The LLM never sees
-            raw context it could misinterpret as license to invent
-            new facts: only what you explicitly put in the prompt.
+            based on the facts already computed. The application
+            controls what context enters the prompt; the base class
+            does not redact or validate that prompt.
 
         fallback_text(facts, context) -> str
             The deterministic text to use when there's no LLM
-            configured, or when the LLM call fails for any reason.
+            configured, output is empty, or SETTLLMAdapterError occurs.
             This is what the user gets today, with zero LLM cost:
             the LLM only makes it sound better, never makes it work.
 
@@ -109,7 +97,12 @@ class PhrasingExpert(SETTExpert):
             def fallback_text(self, facts, context):
                 return {"morning": "Good morning.", ...}[facts["time_of_day"]]
 
-        expert = GreetingExpert(name="greeting", llm=OllamaAdapter())
+        import os
+        from sett.services_llm import OllamaAdapter
+
+        expert = GreetingExpert(
+            name="greeting", llm=OllamaAdapter(model=os.environ["SETT_LLM_MODEL"])
+        )
         result = expert.resolve({"hour": 8})
         # {"time_of_day": "morning", "greeting": "<LLM-phrased or fallback text>"}
     """
@@ -212,9 +205,9 @@ class PhrasingExpert(SETTExpert):
     def _phrase(self, facts: dict[str, Any], context: dict[str, Any]) -> str:
         """
         Returns LLM-phrased text if an LLM is configured and it
-        succeeds; otherwise falls back to fallback_text(). Never
-        raises: a failure here should never stop the agent from
-        responding to the user.
+        succeeds. An absent LLM, empty output or SETTLLMAdapterError
+        selects fallback_text(). Other exceptions may propagate,
+        including errors in subclass hooks or the fallback itself.
         """
         if self._llm is None:
             return self.fallback_text(facts, context)

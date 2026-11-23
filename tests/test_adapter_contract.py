@@ -102,9 +102,9 @@ def test_error_safe_view_never_contains_message_or_cause():
     assert "secret" not in repr(view)
 
 
-# ── L-01: the public message carries no provider-supplied text ─────────
+# ── the public message carries no provider-supplied text ───────────────
 #
-# Defensive and infrastructure audit of v0.14.0, finding L-01. The audit
+# Found by the v0.14.0 audit. The audit
 # put a synthetic bearer token in a provider exception and recovered it
 # from the adapter error's public string. ``safe_view()`` was already
 # clean; the leak was ``str(error)``, which ordinary application logging

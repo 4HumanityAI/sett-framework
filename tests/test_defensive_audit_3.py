@@ -53,7 +53,7 @@ def _analysis(action: str, score, emotional_state: str = "unknown"):
     )
 
 
-# ── H-01: a non-finite harm score cannot reach ALLOW ────────────────────────
+# ── a non-finite harm score cannot reach ALLOW ──────────────────────────────
 
 
 @pytest.mark.parametrize(
@@ -111,7 +111,7 @@ def test_a_nan_producing_analyzer_cannot_reach_a_handler():
     assert performed == []
 
 
-# ── H-02: what policy approved is what runs ─────────────────────────────────
+# ── what policy approved is what runs ───────────────────────────────────────
 
 
 class _GatedAnalyzer(ContextAnalyzer):
@@ -227,7 +227,7 @@ def test_the_fingerprint_describes_the_payload_that_was_performed():
     assert recorded == action_fingerprint(performed)
 
 
-# ── M-01: separators must not decide ────────────────────────────────────────
+# ── separators must not decide ──────────────────────────────────────────────
 
 
 @pytest.mark.parametrize(
@@ -248,7 +248,7 @@ def test_an_ordinary_key_is_still_accepted():
     assert context.metadata_dict() == {"turn_index": 3}
 
 
-# ── M-02: attempt_number counts against the key, not against one call ──────
+# ── attempt_number counts against the key, not against one call ────────────
 #
 # Audit #3 reported this as reproduced ([1, 1] handed to the handler while
 # the store's own attempt_count went 1 -> 2), then the response round
@@ -376,7 +376,7 @@ def test_without_a_key_attempt_number_is_still_this_submissions_own_count():
     assert seen == [1]
 
 
-# ── M-03: the environmental namespace is reserved ───────────────────────────
+# ── the environmental namespace is reserved ─────────────────────────────────
 
 
 def test_a_domain_cannot_collide_with_the_environmental_namespace():
@@ -393,7 +393,7 @@ def test_an_ordinary_domain_is_unaffected():
     assert "health" in memory.read_all()
 
 
-# ── M-04: idempotency keys do not travel in exported traces ─────────────────
+# ── idempotency keys do not travel in exported traces ───────────────────────
 
 
 def test_an_idempotency_key_is_not_written_out_in_full():
@@ -430,7 +430,7 @@ def test_the_digest_still_correlates_events_for_one_operation():
     assert key_digest("payment:invoice-1") != key_digest("payment:invoice-2")
 
 
-# ── M-05: the bound is named for what it does ───────────────────────────────
+# ── the bound is named for what it does ─────────────────────────────────────
 
 
 def test_the_provider_error_helper_is_named_for_bounding_not_redaction():
@@ -449,7 +449,7 @@ def test_the_bound_actually_bounds():
     assert len(bounded) < 5_000
 
 
-# ── M-06: history is a record, not a draft ──────────────────────────────────
+# ── history is a record, not a draft ────────────────────────────────────────
 
 
 def test_private_memory_history_cannot_be_edited_through_its_getter():
@@ -465,7 +465,7 @@ def test_private_memory_history_cannot_be_edited_through_its_getter():
     assert "injected" not in fresh[0]
 
 
-# ── L-01: Application Default Credentials, in full ──────────────────────────
+# ── Application Default Credentials, in full ────────────────────────────────
 
 
 def test_the_credential_helper_no_longer_pre_checks_the_environment():
@@ -494,8 +494,8 @@ def test_a_client_that_constructs_without_the_env_var_is_accepted(monkeypatch):
 
 
 def test_the_client_librarys_refusal_becomes_a_framework_error():
+    from sett._adapters.google_auth import build_google_client
     from sett.exceptions import SETTServiceAdapterError
-    from sett.services_google_auth import build_google_client
 
     class DefaultCredentialsError(Exception):
         pass
@@ -508,7 +508,7 @@ def test_the_client_librarys_refusal_becomes_a_framework_error():
     assert "credentials" in str(excinfo.value).lower()
 
 
-# ── L-02 / L-05: docstrings that describe the code ──────────────────────────
+# ── docstrings that describe the code ───────────────────────────────────────
 
 
 def test_from_context_documents_that_a_bad_value_raises():
@@ -539,7 +539,7 @@ def test_the_threshold_modifier_is_documented_with_the_sign_it_returns():
         assert context.filter_threshold_modifier >= 0
 
 
-# ── L-04: one duration rule, every call site ────────────────────────────────
+# ── one duration rule, every call site ──────────────────────────────────────
 
 
 @pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf"), True, "5"])
@@ -596,7 +596,7 @@ def test_there_is_one_duration_validator_not_one_per_module():
         )
 
 
-# ── L-06 / L-07: release hygiene and the replacement contract ───────────────
+# ── release hygiene and the replacement contract ────────────────────────────
 
 
 def test_no_unreleased_marker_survives_in_a_released_tree():

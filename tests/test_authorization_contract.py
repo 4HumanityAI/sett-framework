@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -10,6 +11,7 @@ from typing import Any
 import pytest
 
 from sett import SETTValidationError
+from sett._governance.validation import canonical_json_bytes
 from sett.authorization_ruler import (
     ApprovalInput,
     ApprovalRequirement,
@@ -23,13 +25,22 @@ from sett.authorization_ruler import (
     FieldValue,
     InMemoryAuthorizationEvidence,
     InMemoryAuthorizationReceiptStore,
+    PolicyApplicability,
+    PolicyApplicabilityState,
+    PolicyBinding,
     PolicyDecision,
+    PolicyOrigin,
+    PolicySelection,
     ReceiptUse,
     SETTAuthorizationConfigurationError,
     SETTAuthorizationError,
     StrictJSONAuthorizationFingerprint,
     VerifiedApproval,
 )
+from sett.policy_ruler import PolicyRuler
+from sett.policy_ruler._handoff import PRODUCED_SLOT_NAMES, VerifiedStateSlot
+
+ENTRY_CHECKPOINT = "test_fixture.entry"
 
 
 class FixedClock:
@@ -70,6 +81,8 @@ class ApprovalPolicy:
             return PolicyDecision.grant(
                 self.policy_id,
                 reason_codes=("approval.valid",),
+                conditions=(),
+                review_obligations=(),
             )
         return PolicyDecision.require_approval(
             self.policy_id,
@@ -77,6 +90,8 @@ class ApprovalPolicy:
                 ApprovalRequirement("approval.operator", "verifier.operator"),
             ),
             reason_codes=("approval.required",),
+            conditions=(),
+            review_obligations=(),
         )
 
 
@@ -120,7 +135,7 @@ class RecordingPolicy:
         verified_approvals: frozenset[VerifiedApproval],
     ) -> PolicyDecision:
         self._calls.append(self.policy_id)
-        return PolicyDecision.grant(self.policy_id)
+        return PolicyDecision.grant(self.policy_id, conditions=(), review_obligations=())
 
 
 class RawApprovalProbePolicy:
@@ -137,12 +152,14 @@ class RawApprovalProbePolicy:
         reader = getattr(request, "_approval_inputs_for_verification", None)
         if callable(reader) and reader():
             self.raw_evidence_seen = True
-            return PolicyDecision.grant(self.policy_id)
+            return PolicyDecision.grant(self.policy_id, conditions=(), review_obligations=())
         return PolicyDecision.require_approval(
             self.policy_id,
             requirements=(
                 ApprovalRequirement("approval.operator", "verifier.operator"),
             ),
+            conditions=(),
+            review_obligations=(),
         )
 
 
@@ -191,8 +208,180 @@ def grant_policy(
 ) -> StaticPolicy:
     return StaticPolicy(
         policy_id,
-        PolicyDecision.grant(policy_id, receipt_use=receipt_use),
+        PolicyDecision.grant(policy_id, receipt_use=receipt_use, conditions=(), review_obligations=()),
     )
+
+
+def declared_binding(policy_id: str, version: str = "1") -> PolicyBinding:
+    """Build one neutral declared binding for a test policy."""
+    return PolicyBinding(
+        policy_id=policy_id,
+        policy_version=version,
+        contract_version="2.0",
+        origins=[
+            PolicyOrigin(
+                requirement_id="test_fixture.requirement",
+                requirement_revision="1",
+                layer_id="test_fixture.layer",
+                source=None,
+                source_absence_reason="Synthetic test fixture",
+            )
+        ],
+        profile_id=None,
+        profile_revision=None,
+    )
+
+
+class DeclaringResolver:
+    """An application-owned resolver driven by each test's declarations."""
+
+    resolver_id = "test_fixture.resolver"
+
+    def __init__(self) -> None:
+        self.required: dict[str, PolicyBinding] = {}
+        self.informative: dict[str, PolicyBinding] = {}
+
+    def declare(self, item: PolicyBinding, *, required: bool = True) -> None:
+        target = self.required if required else self.informative
+        target[item.policy_id] = item
+
+    def resolve(self, request: AuthorizationRequest) -> PolicySelection:
+        items = tuple(self.required.values()) + tuple(self.informative.values())
+        return PolicySelection(
+            selection_id="test_fixture.selection",
+            selection_revision="1",
+            contract_version="2.0",
+            authority_ref="test_fixture.authority",
+            effective_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+            action_id=request.action_id,
+            action_type=request.action_type,
+            required=list(self.required.values()),
+            informative=list(self.informative.values()),
+            applicability=[
+                PolicyApplicability(
+                    policy_id=item.policy_id,
+                    policy_version=item.policy_version,
+                    state=PolicyApplicabilityState.APPLIES,
+                    justification="Synthetic test declaration",
+                    fact_names=[],
+                    evidence_refs=[],
+                )
+                for item in items
+            ],
+            facts={},
+        )
+
+
+class SyntheticStateProducer:
+    """A test-only producer for one slot whose real adapter is not built.
+
+    It exercises the real handoff validation. It is not a condition,
+    consent, review or durability verifier and establishes none.
+    """
+
+    schema_revision = "1"
+
+    def __init__(self, slot: str) -> None:
+        self.slot = slot
+        self.producer_id = "test_fixture.producer." + slot
+
+    def produce(self, context: Any) -> VerifiedStateSlot:
+        value_bytes = b"{}"
+        if self.slot == "conditions":
+            value_bytes = canonical_json_bytes({
+                "inventory": json.loads(context.condition_inventory),
+                "observations": {},
+                "test_fixture_value_hex": value_bytes.hex(),
+            }, field="synthetic condition state")
+        return VerifiedStateSlot(
+            slot=self.slot,
+            producer_id=self.producer_id,
+            schema_revision=self.schema_revision,
+            epoch=0,
+            action_id=context.request.action_id,
+            checkpoint_id=context.checkpoint_id,
+            required_keys=(),
+            observed_keys=(),
+            value_bytes=value_bytes,
+            evidence_refs=(),
+            valid_until=None,
+        )
+
+    def confirm(self, slot: VerifiedStateSlot) -> bool:
+        return True
+
+
+def policy_owner(
+    resolver: DeclaringResolver,
+    clock: FixedClock,
+    evidence: InMemoryAuthorizationEvidence,
+) -> PolicyRuler:
+    """Build one policy owner with the synthetic producers this suite needs."""
+    owner = PolicyRuler(
+        ruler_id="test_fixture.policy_ruler",
+        entry_checkpoint_id=ENTRY_CHECKPOINT,
+        evaluation_ttl_seconds=3_600,
+        max_live_evaluations=256,
+        clock=clock,
+        evidence_sink=evidence,
+        selection_resolver=resolver,
+    )
+    for name in PRODUCED_SLOT_NAMES:
+        owner._register_state_producer(SyntheticStateProducer(name))
+    return owner
+
+
+class Gate:
+    """One configured pair of policy owner and authorization issuer."""
+
+    def __init__(
+        self,
+        *,
+        clock: FixedClock | None = None,
+        evidence: Any = None,
+        store: InMemoryAuthorizationReceiptStore | None = None,
+    ) -> None:
+        self.clock = clock or FixedClock()
+        self.evidence = (
+            evidence if evidence is not None else InMemoryAuthorizationEvidence()
+        )
+        self.resolver = DeclaringResolver()
+        self.policy_ruler = policy_owner(self.resolver, self.clock, self.evidence)
+        self.authorization = AuthorizationRuler(
+            issuer_id="issuer.reference",
+            receipt_ttl_seconds=60,
+            fingerprint_policy=StrictJSONAuthorizationFingerprint(),
+            receipt_store=store or InMemoryAuthorizationReceiptStore(),
+            evidence_sink=self.evidence,
+            clock=self.clock,
+            policy_ruler=self.policy_ruler,
+        )
+
+    def declare(self, policy_id: str, *, required: bool = True) -> PolicyBinding:
+        item = declared_binding(policy_id)
+        self.resolver.declare(item, required=required)
+        return item
+
+    def install(self, action_type: str, policy: Any) -> None:
+        self.authorization.register_policy(
+            action_type, policy, binding=declared_binding(policy.policy_id)
+        )
+
+    def register_policy(self, action_type: str, policy: Any) -> None:
+        self.declare(policy.policy_id)
+        self.install(action_type, policy)
+
+    def register_approval_verifier(self, verifier: Any) -> None:
+        self.authorization.register_approval_verifier(verifier)
+
+    def authorize(self, *args: Any, **kwargs: Any) -> Any:
+        return self.authorization.authorize(*args, **kwargs)
+
+    def verify_and_consume(self, *args: Any, **kwargs: Any) -> None:
+        self.authorization.verify_and_consume(*args, **kwargs)
+
+    def revoke(self, receipt_id: str) -> None:
+        self.authorization.revoke(receipt_id)
 
 
 def ruler(
@@ -200,15 +389,8 @@ def ruler(
     clock: FixedClock | None = None,
     evidence: InMemoryAuthorizationEvidence | None = None,
     store: InMemoryAuthorizationReceiptStore | None = None,
-) -> AuthorizationRuler:
-    return AuthorizationRuler(
-        issuer_id="issuer.reference",
-        receipt_ttl_seconds=60,
-        fingerprint_policy=StrictJSONAuthorizationFingerprint(),
-        receipt_store=store or InMemoryAuthorizationReceiptStore(),
-        evidence_sink=evidence or InMemoryAuthorizationEvidence(),
-        clock=clock or FixedClock(),
-    )
+) -> Gate:
+    return Gate(clock=clock, evidence=evidence, store=store)
 
 
 def test_request_detaches_security_relevant_values() -> None:
@@ -334,7 +516,7 @@ def test_any_deny_is_terminal_for_the_aggregate_decision() -> None:
         "action.execute",
         StaticPolicy(
             "policy.b",
-            PolicyDecision.deny("policy.b", reason_codes=("policy.denied",)),
+            PolicyDecision.deny("policy.b", reason_codes=("policy.denied",), conditions=(), review_obligations=()),
         ),
     )
     gate.register_policy(
@@ -346,6 +528,8 @@ def test_any_deny_is_terminal_for_the_aggregate_decision() -> None:
                 requirements=(
                     ApprovalRequirement("approval.operator", "verifier.operator"),
                 ),
+                conditions=(),
+                review_obligations=(),
             ),
         ),
     )
@@ -358,7 +542,8 @@ def test_any_deny_is_terminal_for_the_aggregate_decision() -> None:
 
 def test_missing_exact_action_policy_fails_closed() -> None:
     gate = ruler()
-    gate.register_policy("action.other", grant_policy())
+    gate.declare("policy.grant")
+    gate.install("action.other", grant_policy())
 
     with pytest.raises(SETTAuthorizationConfigurationError) as raised:
         gate.authorize(request())
@@ -503,7 +688,43 @@ def test_plain_receipt_is_single_use() -> None:
     with pytest.raises(SETTAuthorizationError) as raised:
         gate.verify_and_consume(receipt, item)
 
+    # A single use terminates the private
+    # binding, so the new boundary rejects before the store reports
+    # authorization.receipt_consumed. Store semantics are unchanged.
+    assert raised.value.reason_code == "authorization.policy_binding_unavailable"
+
+
+def test_the_store_keeps_its_own_single_use_consumption_rule() -> None:
+    """The other half of the case above: the backend rule itself is unchanged.
+
+    The case above records which boundary now rejects first. It does not
+    show what the store does, because the store is never reached. This one
+    asks the store directly, so the two facts stay separate evidence: the
+    private binding closes earlier, and the receipt store still refuses a
+    second consumption of single-use authority with its own diagnostic.
+    """
+    store = InMemoryAuthorizationReceiptStore()
+    gate = ruler(store=store)
+    gate.register_policy("action.execute", grant_policy())
+    item = request()
+    receipt = gate.authorize(item).receipt
+    assert receipt is not None
+    assert receipt.receipt_use is ReceiptUse.SINGLE_USE
+
+    store.verify_and_consume(
+        receipt,
+        request_fingerprint=receipt.request_fingerprint,
+        now=gate.clock.now(),
+    )
+    with pytest.raises(SETTAuthorizationError) as raised:
+        store.verify_and_consume(
+            receipt,
+            request_fingerprint=receipt.request_fingerprint,
+            now=gate.clock.now(),
+        )
+
     assert raised.value.reason_code == "authorization.receipt_consumed"
+    assert raised.value.receipt_id == receipt.receipt_id
 
 
 def test_request_cannot_choose_replay_without_policy_consent() -> None:
@@ -521,7 +742,8 @@ def test_request_cannot_choose_replay_without_policy_consent() -> None:
     with pytest.raises(SETTAuthorizationError) as raised:
         gate.verify_and_consume(receipt, item)
 
-    assert raised.value.reason_code == "authorization.receipt_consumed"
+    # Same precedence: the terminated binding rejects first.
+    assert raised.value.reason_code == "authorization.policy_binding_unavailable"
 
 
 def test_replay_requires_unanimous_policy_consent() -> None:
@@ -675,14 +897,7 @@ def test_authorization_evidence_preserves_concurrent_events() -> None:
 
 
 def test_evidence_failure_prevents_receipt_issue() -> None:
-    gate = AuthorizationRuler(
-        issuer_id="issuer.reference",
-        receipt_ttl_seconds=60,
-        fingerprint_policy=StrictJSONAuthorizationFingerprint(),
-        receipt_store=InMemoryAuthorizationReceiptStore(),
-        evidence_sink=FailingEvidence(),
-        clock=FixedClock(),
-    )
+    gate = ruler(evidence=FailingEvidence())
     gate.register_policy("action.execute", grant_policy())
 
     with pytest.raises(SETTAuthorizationConfigurationError) as raised:
@@ -709,7 +924,7 @@ def test_duplicate_policy_identifier_is_rejected() -> None:
     gate.register_policy("action.execute", grant_policy("policy.same"))
 
     with pytest.raises(SETTAuthorizationConfigurationError) as raised:
-        gate.register_policy("action.execute", grant_policy("policy.same"))
+        gate.install("action.execute", grant_policy("policy.same"))
 
     assert raised.value.reason_code == "authorization.policy_duplicate"
 
@@ -724,7 +939,7 @@ def test_constraints_are_descriptors_and_never_executed_by_the_ruler() -> None:
         "action.execute",
         StaticPolicy(
             "policy.grant",
-            PolicyDecision.grant("policy.grant", constraints=(constraint,)),
+            PolicyDecision.grant("policy.grant", constraints=(constraint,), conditions=(), review_obligations=()),
         ),
     )
 
@@ -743,14 +958,14 @@ def test_constraint_identifiers_cannot_collide_across_policies() -> None:
         "action.execute",
         StaticPolicy(
             "policy.a",
-            PolicyDecision.grant("policy.a", constraints=(constraint,)),
+            PolicyDecision.grant("policy.a", constraints=(constraint,), conditions=(), review_obligations=()),
         ),
     )
     gate.register_policy(
         "action.execute",
         StaticPolicy(
             "policy.b",
-            PolicyDecision.grant("policy.b", constraints=(constraint,)),
+            PolicyDecision.grant("policy.b", constraints=(constraint,), conditions=(), review_obligations=()),
         ),
     )
 
@@ -774,6 +989,8 @@ def test_requirement_identifier_cannot_name_two_verifiers() -> None:
             PolicyDecision.require_approval(
                 "policy.a",
                 requirements=(ApprovalRequirement("approval.same", "verifier.a"),),
+                conditions=(),
+                review_obligations=(),
             ),
         ),
     )
@@ -784,6 +1001,8 @@ def test_requirement_identifier_cannot_name_two_verifiers() -> None:
             PolicyDecision.require_approval(
                 "policy.b",
                 requirements=(ApprovalRequirement("approval.same", "verifier.b"),),
+                conditions=(),
+                review_obligations=(),
             ),
         ),
     )

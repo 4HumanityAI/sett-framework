@@ -263,7 +263,7 @@ class ContextAnalyzer:
         # ── Layer 2: RiskProfile modifier ────────────────────────────────────
         profile_modifier = 0.0
         if risk_profile is not None:
-            # Composite score (0.0–1.0) scales to a modifier (0.0–3.0)
+            # Composite score (0.0 to 1.0) scales to a modifier (0.0 to 3.0)
             profile_modifier = risk_profile.composite_score * 3.0
 
         # ── Layer 3: Environmental context modifier ──────────────────────────

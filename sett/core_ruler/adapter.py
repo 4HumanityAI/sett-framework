@@ -12,6 +12,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from email.message import Message
 from enum import Enum
 from time import monotonic
 from types import MappingProxyType
@@ -352,12 +353,19 @@ def provider_status_code(error: BaseException) -> int | None:
 
 
 def provider_retry_after(error: BaseException) -> float | None:
-    """Read a numeric Retry-After value from structured response headers."""
+    """Read a numeric Retry-After value from structured response headers.
+
+    Two header containers are understood: a mapping, which is what the
+    ``requests`` and ``httpx`` transports expose, and the standard
+    library's ``email.message.Message``, which is what ``urllib`` attaches
+    to an ``HTTPError`` (as ``http.client.HTTPMessage``). Anything else is
+    not read, so an unrelated object can never be mistaken for a header.
+    """
     response = getattr(error, "response", None)
     headers = getattr(response, "headers", None)
-    if not isinstance(headers, Mapping):
+    if not isinstance(headers, (Mapping, Message)):
         headers = getattr(error, "headers", None)
-    if not isinstance(headers, Mapping):
+    if not isinstance(headers, (Mapping, Message)):
         return None
     value = headers.get("retry-after") or headers.get("Retry-After")
     try:
@@ -396,7 +404,7 @@ def normalized_adapter_error(
     The public message is built only from values SETT controls: the
     provider label, the operation, the neutral error category, and the
     protocol status. The provider's own exception text is never part of
-    it (L-01, defensive and infrastructure audit of v0.14.0). Truncating
+    it (found by the v0.14.0 audit). Truncating
     that text, which is what this function used to do, bounded its length
     and nothing else, so ``logger.error("%s", error)`` in ordinary
     application code still exported whatever the provider had put in
@@ -437,6 +445,37 @@ def normalized_adapter_error(
         retryable=retryable,
         retry_after_seconds=provider_retry_after(error),
         reason_code=code,
+    )
+
+
+def required_model(
+    value: object,
+    *,
+    error_type: type[SETTAdapterError],
+    provider: str,
+    adapter_name: str,
+    parameter: str = "model",
+) -> str:
+    """Return the model identifier the application chose, or refuse.
+
+    SETT ships no default model for any provider. Which model an
+    application uses is its own decision, with its own cost, quality and
+    availability consequences, and a default written here would make that
+    decision for it and go stale as providers retire models. An adapter
+    built without one fails at construction with a configuration error
+    instead of on the first call.
+    """
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    raise error_type(
+        f"{adapter_name} needs {parameter}=: the identifier of the model "
+        "your application chose. SETT does not select a model for you; "
+        "see the provider's documentation for the identifiers available "
+        "to your account.",
+        kind=AdapterErrorKind.CONFIGURATION,
+        provider=provider,
+        adapter_name=adapter_name,
+        reason_code="adapter.model_missing",
     )
 
 

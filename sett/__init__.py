@@ -32,11 +32,29 @@ if not any(
 ):
     _sett_logger.addHandler(_logging.NullHandler())
 
-__version__ = "0.14.0"
+__version__ = "0.15.0"
 __author__ = "Eduardo Daniel Viñales"
 __license__ = "MIT"
 
 # Core building blocks
+import sys as _sys
+
+from sett._adapters import google_auth as services_google_auth
+from sett._governance import (
+    evidence as _governance_evidence,
+)
+from sett._governance import (
+    protocols as _governance_protocols,
+)
+from sett._governance import (
+    validation as _governance_validation,
+)
+from sett._governance import (
+    values as _governance_values,
+)
+from sett._governance import (
+    verdict as _governance_verdict,
+)
 from sett.audit_ruler.trace import TraceEvent, TraceRecorder
 from sett.authorization_ruler import (
     ApprovalInput,
@@ -359,3 +377,11 @@ __all__ = [  # noqa: RUF022
     "SETTAuthorizationError",
     "SETTAuthorizationConfigurationError",
 ]
+
+# Preserve the module paths used by 0.15.0 imports and serialized values.
+_sys.modules[__name__ + "._governance_values"] = _governance_values
+_sys.modules[__name__ + "._governance_validation"] = _governance_validation
+_sys.modules[__name__ + "._governance_protocols"] = _governance_protocols
+_sys.modules[__name__ + "._governance_verdict"] = _governance_verdict
+_sys.modules[__name__ + "._governance_evidence"] = _governance_evidence
+_sys.modules[__name__ + ".services_google_auth"] = services_google_auth

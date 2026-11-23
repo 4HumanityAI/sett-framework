@@ -1,18 +1,17 @@
-"""The declared Python support window must equal the tested one.
+"""Declared Python support must match the configured verification matrix.
 
 ``pyproject.toml`` claiming a version is a promise to whoever installs
 SETT. Before v0.14.0 the promise was unverified: classifiers listed
 3.10 through 3.13 while the suite only ever ran on 3.13. The defensive
-and infrastructure audit of v0.14.0 recorded that gap as M-03, and the
+and infrastructure audit of v0.14.0 recorded that gap, and the
 first run of a second interpreter found a real defect behind it -
 ``sett/persistence/sqlite.py`` imported ``typing.Self``, so ``import
 sett`` raised ``ImportError`` on the 3.10 the project declared and no
 test noticed.
 
-Adding the CI matrix fixed that instance. This file fixes the class:
-declaring a version and testing it are now one act, because doing only
-the first fails here. The same applies in reverse, so a version can be
-dropped from CI only by dropping the promise to support it.
+These tests compare local declarations and workflow configuration. They do
+not execute the matrix or prove that a listed interpreter passed. Actual
+results must identify their source revision and environment.
 """
 from __future__ import annotations
 
@@ -88,7 +87,7 @@ def test_ruff_targets_the_lowest_declared_version():
 
 
 def test_the_matrix_runs_on_more_than_one_operating_system():
-    """M-02 and the release builder both have platform-dependent behaviour."""
+    """File permissions and the release builder both have platform-dependent behaviour."""
     match = re.search(r'^\s+os: \[(.+)\]$', _workflow_text(), re.MULTILINE)
     assert match, "The CI test job declares no operating-system matrix list."
     systems = tuple(name.strip() for name in match.group(1).split(","))

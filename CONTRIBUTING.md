@@ -5,7 +5,7 @@ project, and any help is genuinely welcome, at any experience level.
 
 ## 🐛 Found a bug, or have an idea?
 
-Open an [Issue](https://github.com/EduDanielV/sett-framework/issues).
+Open an [Issue](https://github.com/4HumanityAI/sett-framework/issues).
 Bugs, feature suggestions, questions about the architecture: all of
 it belongs there, not lost in a chat somewhere. A good bug report
 includes:
@@ -24,6 +24,7 @@ includes:
 5. Make sure `python -m pytest tests/ -v` passes before opening a PR
 6. Open a Pull Request describing what changed and why
 
+CI runs `ruff check`. Repository-wide formatting is outside that check.
 The lint gate is defined by the pinned Ruff version in `pyproject.toml`. A Ruff
 binary found elsewhere on `PATH` is not a release result because rule behavior
 can differ between versions.
@@ -35,6 +36,11 @@ also requires identical source bytes, the same source directory name, and a
 matching Python/zlib compression toolchain; different compressed bytes alone
 do not establish that source content was altered.
 
+Working correspondences with external instruments are records in
+`governance/mappings/`. Edit a record, never its generated page, then run
+`python tools/correspondence.py validate`, `generate` and `check`; see
+[Working correspondences](docs/working_correspondences.md).
+
 If you're adding a new agent/expert pattern or touching `ethics_ruler`,
 a quick Issue first (before writing code) is a good idea: it's a
 young framework and some design decisions are still being settled.
@@ -43,8 +49,8 @@ young framework and some design decisions are still being settled.
 
 Living contracts and design documents keep one stable, version-independent
 path: one concept, one canonical file. Update that file in place and record
-its `Introduced` and `Last reviewed` versions inside the document. Git history,
-release tags, and `CHANGELOG.md` preserve earlier revisions.
+its `Introduced` version inside the document. Git history, release tags, and
+`CHANGELOG.md` preserve earlier revisions.
 
 Use a version in a filename only when the document is intentionally tied to a
 single release and will not become the current contract, such as a migration
@@ -76,3 +82,17 @@ There's no Discord or chat server: Issues are the place for now.
 There's no separate translated documentation yet either (this file and
 the README are in English only, for the moment). Both are likely to
 come later, once there's more to talk about.
+
+
+## How decisions are made
+
+The maintainer makes the final call on changes, and can start work without
+waiting for anyone else to adopt it first. If you propose something, explain
+where it would help: two or more concrete situations are enough, and they
+don't need to be projects already running somewhere. Either way, the proposed
+behavior needs technical evidence behind it.
+
+Please keep the established vocabulary: Agent, Expert, Ruler and Adapter.
+[Terminology](docs/terminology.md) and [conventions](docs/SETT_Conventions.md)
+explain each term. Passing the automated checks is necessary but not enough:
+a change is incorporated and released only with the maintainer's approval.

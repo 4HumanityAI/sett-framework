@@ -73,10 +73,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Which trace terminal closes a controlled run, per structured status.
-# Cancellation and deadline exhaustion get their own kinds rather than
-# sharing "trace.failed": a trace that cannot tell "somebody stopped this"
-# from "this broke" cannot answer the question it exists to answer.
+# Trace terminals for controlled outcomes. Cancellation and timeout
+# must remain distinguishable from failure.
 _TRACE_TERMINAL_BY_STATUS = {
     ExecutionStatus.CANCELLED: "trace.cancelled",
     ExecutionStatus.TIMED_OUT: "trace.timed_out",
@@ -454,12 +452,9 @@ class SETTOrchestrator:
         )
         agent._current_emotional_state = emotional_state
         agent._current_location_id = location_id
-        # A control for this agent's own node, when lifecycle management is
-        # in use. Without an ambient control this is None and every
-        # checkpoint below is skipped: routing behaves exactly as it did in
-        # v0.11.0 for any caller that never asked for cancellation. When one
-        # is derived, it is bounded by the policy's per-agent timeout (if
-        # any) on top of whatever time the parent has left.
+        # Without an ambient control, lifecycle checkpoints are skipped.
+        # A derived control is bounded by the per-agent timeout, when configured,
+        # and by the parent's remaining time.
         agent_control = derive_control_for(
             agent_context,
             timeout_seconds=self._lifecycle_policy.agent_timeout(domain),
@@ -998,10 +993,7 @@ class SETTOrchestrator:
                     self._agents[domain].name,
                 )
             except (SETTCancelledError, SETTTimeoutError) as error:
-                # A broadcast that was stopped was not a broadcast that
-                # broke. Recording it as "failed" would put the one
-                # distinction this version exists to make back where it
-                # was, at the level where an application actually reads it.
+                # A cancelled or timed-out broadcast is not a failed broadcast.
                 cancelled = isinstance(error, SETTCancelledError)
                 broadcast_stopped = self._trace_recorder.record(
                     parent,
@@ -1265,9 +1257,8 @@ class SETTOrchestrator:
                 outcomes: list[StageOutcome] = []
                 prev_output: dict[str, Any] | None = None
                 rejection: RejectionOutcome | None = None
-                # v0.12.0: which stage halted the pipeline, so a skipped
-                # stage can name the dependency that made it unreachable
-                # instead of only reporting that it never ran.
+                # Retain the halted stage so skipped stages can identify the
+                # dependency that made them unreachable.
                 skip_cause: SkipCause | None = None
 
                 for index, step in enumerate(normalized):
@@ -1977,13 +1968,8 @@ class SETTOrchestrator:
                 error.trace_event_id = trace_failed.event_id
             except (AttributeError, TypeError):
                 pass
-            # A stage that raises unwinds through this handler instead of
-            # through the normal PARTIAL path below, but the stages before
-            # it completed just as really as they would have under a
-            # cancellation, since the outcome of a genuine failure is not
-            # informative enough to justify discarding them. Same shape as
-            # the PipelineResult built below, so a caller does not need to
-            # know which of the two paths produced it.
+            # An exception must retain stages that already completed, just as the
+            # PARTIAL path does. Keep the same PipelineResult shape on both paths.
             partial_result = (
                 PipelineResult(
                     completed=False,
@@ -2162,7 +2148,7 @@ class SETTOrchestrator:
 
         Delegates to TraceRecorder.verify(): the integrity check is
         global across every trace this recorder has recorded, not
-        scoped to `trace_id` (F28, defensive audit #2). See
+        scoped to `trace_id`. See
         TraceRecorder.verify()'s docstring for the full semantics.
         """
         return self._trace_recorder.verify(trace_id)

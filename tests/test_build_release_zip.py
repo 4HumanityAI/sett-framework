@@ -23,6 +23,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import build_release_zip as brz
 
 
+def test_only_generated_governance_card_names_are_excluded(tmp_path):
+    root = tmp_path / "project"
+    expected = set()
+    for folder in (root, root / "examples", root / "governance" / "nested"):
+        folder.mkdir(parents=True)
+        for name in ("governance_card.html", "governance_card.json", "source.html", "record.json"):
+            (folder / name).write_text("fixture", encoding="ascii")
+            if name in {"source.html", "record.json"}:
+                expected.add("project/" + (folder / name).relative_to(root).as_posix())
+    output = tmp_path / "release.zip"
+    brz.build(root, output)
+    with ZipFile(output) as archive:
+        assert set(archive.namelist()) == expected
+
+
 def _make_tree(root: Path) -> None:
     (root / "sett" / "core_ruler").mkdir(parents=True)
     (root / "sett" / "core_ruler" / "agent.py").write_text("# real source\n")
@@ -175,7 +190,7 @@ def test_declared_version_reads_without_importing_the_package(synthetic_project)
 
 def test_default_destination_uses_the_declared_version(synthetic_project):
     destination = brz.default_destination(synthetic_project)
-    assert destination.name == "SETT_Framework_v9.9.9_AUDIT.zip"
+    assert destination.name == "SETT_Framework_v9.9.9.zip"
     assert destination.parent == synthetic_project.parent
 
 
@@ -267,6 +282,57 @@ def test_script_help_prints_usage_without_creating_a_file(tmp_path):
 # ── the archive ships raw bytes, so line endings are release content ────
 
 CRLF = b"\r\n"
+BINARY_RELEASE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".pdf", ".zip"})
+
+
+def _release_text_files_with_crlf(root: Path) -> list[str]:
+    """Check every release file except explicitly declared binary formats."""
+    return sorted(
+        path.relative_to(root).as_posix()
+        for path in brz.included_files(root)
+        if path.suffix.lower() not in BINARY_RELEASE_SUFFIXES
+        and CRLF in path.read_bytes()
+    )
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["source.py", "README.md", "record.json", "pyproject.toml", "ci.yml",
+     ".gitattributes", "LICENSE", "notes.unknown"],
+)
+def test_release_line_ending_guard_still_detects_text_crlf(tmp_path, name):
+    path = tmp_path / name
+    path.write_bytes(b"first\r\nsecond\r\n")
+    (tmp_path / "clean.txt").write_bytes(b"first\nsecond\n")
+    assert _release_text_files_with_crlf(tmp_path) == [name]
+
+
+@pytest.mark.parametrize("suffix", sorted(BINARY_RELEASE_SUFFIXES))
+def test_release_line_ending_guard_exempts_declared_binary_formats(tmp_path, suffix):
+    path = tmp_path / ("asset" + suffix)
+    # CRLF can be binary data; the guard does not validate media formats.
+    payload = b"\x00\xff\r\n\x1a\n"
+    path.write_bytes(payload)
+    (tmp_path / "source.py").write_bytes(b"value = 1\r\n")
+    assert _release_text_files_with_crlf(tmp_path) == ["source.py"]
+    assert path.read_bytes() == payload
+
+
+def test_release_line_ending_guard_does_not_skip_undecodable_text(tmp_path):
+    (tmp_path / "source.py").write_bytes(b"\xff\r\n")
+    assert _release_text_files_with_crlf(tmp_path) == ["source.py"]
+
+
+def test_release_binary_formats_match_declared_git_attributes():
+    root = Path(__file__).resolve().parents[1]
+    declarations = {
+        fields[0][1:]
+        for line in (root / ".gitattributes").read_text(encoding="utf-8").splitlines()
+        if len(fields := line.split()) == 2
+        and fields[0].startswith("*.")
+        and fields[1] == "binary"
+    }
+    assert declarations == BINARY_RELEASE_SUFFIXES
 
 
 def test_no_release_file_carries_windows_line_endings():
@@ -278,14 +344,11 @@ def test_no_release_file_carries_windows_line_endings():
     everyone else has. That happened while preparing v0.14.0: a scripted
     documentation edit rewrote twenty files with CRLF and nothing in the
     suite objected. The archive is the artifact under review, so the check
-    belongs to the archive.
+    belongs to the archive. Binary formats declared in `.gitattributes` are
+    outside this text check: CRLF bytes can be part of their file format.
     """
     root = Path(__file__).resolve().parents[1]
-    offenders = sorted(
-        path.relative_to(root).as_posix()
-        for path in brz.included_files(root)
-        if CRLF in path.read_bytes()
-    )
+    offenders = _release_text_files_with_crlf(root)
     assert not offenders, (
         "These release files carry CRLF line endings and would ship that "
         f"way: {offenders}. Rewrite them with LF."
@@ -293,7 +356,7 @@ def test_no_release_file_carries_windows_line_endings():
 
 
 def test_the_release_archive_carries_the_templates_and_the_workflow():
-    """The documented access path for both is the source tree (L-02).
+    """The documented access path for both is the source tree.
 
     `templates/` is not packaged in the wheel by design, so the release
     archive and the checkout are the only places it exists. Saying so in

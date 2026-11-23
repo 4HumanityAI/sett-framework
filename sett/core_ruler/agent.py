@@ -8,7 +8,7 @@ Each agent:
 - Contains one or more SETTExperts that do the actual work
 - Maintains its own PrivateMemory (not exposed through the public API;
   isolated by convention, not by a runtime access-control boundary -
-  see PrivateMemory's own docstring, F24 of defensive audit #2)
+  see PrivateMemory's own docstring)
 - Publishes ONLY the final result to the UniversalMemory
 - Does not communicate directly with other agents
 
@@ -163,7 +163,7 @@ class SETTAgent(ABC):
         Raises:
             SETTValidationError: If expert.name is empty or whitespace.
             SETTConfigurationError: If an expert is already registered
-                under this name (F05/F08, defensive audit #2). Unlike
+                under this name. Unlike
                 SETTOrchestrator.register_agent(), whose domain-keyed
                 "swap the stub for the real agent" replacement is a
                 documented, tested feature, nothing here documents or

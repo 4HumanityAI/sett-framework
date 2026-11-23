@@ -6,24 +6,19 @@ Sentiment analysis adapter backed by Google Cloud Natural Language.
 Implements SentimentBase: fully interchangeable with any other
 provider's adapter.
 
-Ported from an early recovered prototype
-(SentimentAnalyzer class, Nov. 2024): same underlying sentiment call
-(`language_v1.LanguageServiceClient().analyze_sentiment`), reduced to
-just that. Two things present in the original were deliberately not
-carried over:
+It makes one call,
+`language_v1.LanguageServiceClient().analyze_sentiment`, and nothing
+else:
 
-  - Storing results in Google Cloud Storage + loading them to
-    BigQuery: that was infrastructure for a solo experiment logging
-    its own history, not something a sentiment adapter needs to do to
-    answer "what is the sentiment of this text": an application that
-    wants to log results can do so with the SentimentResult this
-    adapter already returns, without the adapter reaching into two
-    more cloud services on every call.
-  - `enhance_response()` (a Gemini call to generate text): that is
-    text generation, not sentiment analysis: it belongs to an LLM
-    adapter/PhrasingExpert, not here. Mixing it into this class was
-    exactly the kind of two-responsibilities-in-one-expert pattern
-    Convention #1's corollary already documents splitting.
+  - It does not store results: answering "what is the sentiment of
+    this text" does not need storage. An application that wants to
+    log results can do so with the SentimentResult this adapter
+    returns, without the adapter reaching into other cloud services on
+    every call.
+  - It does not generate text: that is text generation, not sentiment
+    analysis, and it belongs to an LLM adapter or a PhrasingExpert.
+    Mixing both into one class is the two-responsibilities pattern
+    that Convention #1's corollary documents splitting.
 
 Requires, from a source checkout: pip install -e ".[google-sentiment]"
 """
@@ -31,6 +26,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from sett._adapters.google_auth import (
+    build_google_client,
+    google_credentials_from_path,
+)
 from sett.core_ruler.adapter import (
     AdapterCapabilities,
     AdapterErrorKind,
@@ -46,10 +45,6 @@ from sett.exceptions import (
     SETTCancelledError,
     SETTServiceAdapterError,
     SETTTimeoutError,
-)
-from sett.services_google_auth import (
-    build_google_client,
-    google_credentials_from_path,
 )
 from sett.services_sentiment.base import (
     SentenceSentiment,

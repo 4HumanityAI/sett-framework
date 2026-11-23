@@ -20,8 +20,8 @@ Privacy design:
     agent, a timestamp, and an optional free-text `message`. Nothing
     about the object's structure requires personal data.
 
-    This is a structural intent, not a runtime guarantee (F11,
-    defensive audit #2): `location_id`, `source_domain`, and `message`
+    This is a structural intent, not a runtime guarantee:
+    `location_id`, `source_domain`, and `message`
     are plain strings, and nothing in this class inspects or rejects
     their content. The caller building an EnvironmentalContext is
     responsible for keeping personal data out of it; in particular,
@@ -58,7 +58,7 @@ class EnvironmentalContext:
             source_domain="health",
         )
         # publish_environmental_context() builds the EnvironmentalContext
-        # itself from these fields (F25, defensive audit #2: this example
+        # itself from these fields (this example
         # previously constructed the object by hand and passed it in, but
         # the Orchestrator's real signature takes the raw fields, not a
         # ready-made EnvironmentalContext, since that call belongs to
@@ -93,7 +93,7 @@ class EnvironmentalContext:
     """
     Optional human-readable description of why this level was triggered.
     This is a free-text field: nothing in EnvironmentalContext inspects
-    or filters its content (F11, defensive audit #2). The caller
+    or filters its content. The caller
     constructing this context is responsible for keeping it free of
     personal information; it is broadcast to every other instance
     reading this location's environmental context.
@@ -110,7 +110,7 @@ class EnvironmentalContext:
     notifying emergency services.
 
     This is a recommendation derived from risk_level, not an effect:
-    setting this field never contacts anyone (F20, defensive audit #2 -
+    setting this field never contacts anyone (it was
     renamed from `auto_notify_emergency`, whose name implied an
     automatic side effect that no code in this framework performs). A
     caller that wants the real notification to happen must submit it
@@ -177,11 +177,11 @@ class EnvironmentalContext:
     def from_dict(cls, data: dict[str, Any]) -> EnvironmentalContext:
         """Reconstruct from UniversalMemory storage.
 
-        F03 fix (defensive audit #2): ``timestamp`` used to be dropped
+        Fix: ``timestamp`` used to be dropped
         here even though ``to_dict()`` always serializes it, so every
         read through UniversalMemory silently replaced the real publish
         time with the moment it happened to be read, the same class of
-        bug as RiskProfile.from_dict()'s own timestamp loss (F12).
+        bug as RiskProfile.from_dict()'s own timestamp loss.
         """
         kwargs: dict[str, Any] = {
             "risk_level": RiskLevel(data["risk_level"]),

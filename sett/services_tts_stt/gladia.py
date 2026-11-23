@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import urlsplit
 
 from sett.core_ruler.adapter import (
     AdapterCapabilities,
@@ -20,9 +21,25 @@ from sett.services_tts_stt._http import (
     poll_json,
     require_requests,
     response_json,
+    validated_endpoint,
 )
 from sett.services_tts_stt._language import resolve_language_code
 from sett.services_tts_stt.base import STTBase
+
+
+def _origin(url: str) -> tuple[str, str, int]:
+    """Compare absolute HTTP origins before attaching the configured credential."""
+    if not isinstance(url, str) or "\\" in url or any(ord(c) <= 32 or ord(c) == 127 for c in url):
+        raise ValueError("Invalid polling URL")
+    parts = urlsplit(url)
+    if (
+        parts.scheme not in {"https", "http"} or not parts.hostname
+        or parts.username is not None or parts.password is not None
+        or not parts.netloc.isascii() or "%" in parts.netloc or parts.fragment
+    ):
+        raise ValueError("Invalid polling origin")
+    port = parts.port
+    return parts.scheme, parts.hostname, port if port is not None else (443 if parts.scheme == "https" else 80)
 
 
 class GladiaSTTAdapter(STTBase):
@@ -48,7 +65,12 @@ class GladiaSTTAdapter(STTBase):
             provider="gladia",
             adapter_name=type(self).__name__,
         )
-        self._base_url = base_url.rstrip("/")
+        self._base_url = validated_endpoint(
+            base_url,
+            provider="gladia",
+            adapter_name=type(self).__name__,
+            parameter="base_url",
+        ).rstrip("/")
         self._timeout_seconds = validate_duration_seconds(
             timeout_seconds, name="timeout_seconds"
         )
@@ -127,8 +149,10 @@ class GladiaSTTAdapter(STTBase):
                 operation="submit_transcription",
             )
             try:
-                result_url = str(submitted["result_url"])
-            except (KeyError, TypeError) as error:
+                result_url = submitted["result_url"]
+                if _origin(result_url) != _origin(self._base_url):
+                    raise ValueError("Untrusted polling origin")
+            except (KeyError, TypeError, ValueError) as error:
                 raise self._invalid(error, "submit_transcription") from error
 
             def get_result(request_timeout: float | None) -> Any:

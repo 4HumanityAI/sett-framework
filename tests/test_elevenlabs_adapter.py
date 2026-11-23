@@ -32,29 +32,30 @@ class TestElevenLabsTTSAdapterBasics:
     def test_requires_api_key(self, monkeypatch):
         monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
         with pytest.raises(SETTServiceAdapterError):
-            ElevenLabsTTSAdapter()
+            ElevenLabsTTSAdapter(model_id="test-model")
 
     def test_api_key_from_env_var(self, monkeypatch):
         monkeypatch.setenv("ELEVENLABS_API_KEY", "env-key")
-        adapter = ElevenLabsTTSAdapter()
+        adapter = ElevenLabsTTSAdapter(model_id="test-model")
         assert adapter._api_key == "env-key"
 
     def test_api_key_argument_overrides_env(self, monkeypatch):
         monkeypatch.setenv("ELEVENLABS_API_KEY", "env-key")
-        adapter = ElevenLabsTTSAdapter(api_key="explicit-key")
+        adapter = ElevenLabsTTSAdapter(api_key="explicit-key", model_id="test-model")
         assert adapter._api_key == "explicit-key"
 
     def test_audio_format_is_mp3(self):
-        adapter = ElevenLabsTTSAdapter(api_key="k")
+        adapter = ElevenLabsTTSAdapter(api_key="k", model_id="test-model")
         assert adapter.audio_format == "mp3"
 
     def test_repr_contains_voice_id(self):
-        adapter = ElevenLabsTTSAdapter(api_key="k", voice_id="my-voice")
+        adapter = ElevenLabsTTSAdapter(api_key="k", voice_id="my-voice", model_id="test-model")
         assert "my-voice" in repr(adapter)
 
     def test_stability_similarity_style_clamped_to_valid_range(self):
         adapter = ElevenLabsTTSAdapter(
-            api_key="k", stability=5.0, similarity_boost=-1.0, style=2.0
+            api_key="k", stability=5.0, similarity_boost=-1.0, style=2.0,
+            model_id="test-model",
         )
         assert adapter._stability == 1.0
         assert adapter._similarity_boost == 0.0
@@ -66,14 +67,14 @@ class TestElevenLabsTTSAdapterSynthesize:
     @patch("sett.services_tts_stt.elevenlabs.requests.post")
     def test_synthesize_returns_audio_bytes(self, mock_post):
         mock_post.return_value = _fake_response(content=b"real-audio-bytes")
-        adapter = ElevenLabsTTSAdapter(api_key="k")
+        adapter = ElevenLabsTTSAdapter(api_key="k", model_id="test-model")
         result = adapter.synthesize("Hi, how can I help you?")
         assert result == b"real-audio-bytes"
 
     @patch("sett.services_tts_stt.elevenlabs.requests.post")
     def test_synthesize_sends_correct_url_and_headers(self, mock_post):
         mock_post.return_value = _fake_response()
-        adapter = ElevenLabsTTSAdapter(api_key="secret-key", voice_id="voice-123")
+        adapter = ElevenLabsTTSAdapter(api_key="secret-key", voice_id="voice-123", model_id="test-model")
         adapter.synthesize("hello")
 
         call = mock_post.call_args
@@ -97,7 +98,7 @@ class TestElevenLabsTTSAdapterSynthesize:
     @patch("sett.services_tts_stt.elevenlabs.requests.post")
     def test_synthesize_kwargs_override_instance_defaults(self, mock_post):
         mock_post.return_value = _fake_response()
-        adapter = ElevenLabsTTSAdapter(api_key="k", voice_id="default-voice")
+        adapter = ElevenLabsTTSAdapter(api_key="k", voice_id="default-voice", model_id="test-model")
         adapter.synthesize("hello", voice_id="override-voice")
 
         call = mock_post.call_args
@@ -111,19 +112,19 @@ class TestElevenLabsTTSAdapterErrorHandling:
         mock_post.return_value = _fake_response(
             status_code=401, text="Unauthorized"
         )
-        adapter = ElevenLabsTTSAdapter(api_key="bad-key")
+        adapter = ElevenLabsTTSAdapter(api_key="bad-key", model_id="test-model")
         with pytest.raises(SETTServiceAdapterError) as exc_info:
             adapter.synthesize("hello")
         assert "401" in str(exc_info.value)
 
     @patch("sett.services_tts_stt.elevenlabs.requests.post")
     def test_an_http_error_body_never_reaches_the_public_message(self, mock_post):
-        """F29 (defensive audit #2), then L-01 (v0.14.0 audit).
+        """Two fixes, the second found by the v0.14.0 audit.
 
-        F29 bounded an HTTP error body that used to be embedded up to 500
+        The first bounded an HTTP error body that used to be embedded up to 500
         characters with no marker that it had been cut. Bounding capped its
         length and nothing else, so the body still reached any log line
-        that formatted the exception. L-01 removed it from the public
+        that formatted the exception. The second removed it from the public
         message entirely: the message is now built only from values SETT
         controls, and the body stays on ``__cause__``, where it is still
         bounded and still visible in a local traceback.
@@ -132,7 +133,7 @@ class TestElevenLabsTTSAdapterErrorHandling:
 
         huge_body = "e" * (DEFAULT_PROVIDER_ERROR_MAX_LENGTH + 300)
         mock_post.return_value = _fake_response(status_code=500, text=huge_body)
-        adapter = ElevenLabsTTSAdapter(api_key="k")
+        adapter = ElevenLabsTTSAdapter(api_key="k", model_id="test-model")
 
         with pytest.raises(SETTServiceAdapterError) as exc_info:
             adapter.synthesize("hello")
@@ -148,7 +149,7 @@ class TestElevenLabsTTSAdapterErrorHandling:
     def test_network_error_raises_sett_service_adapter_error(self, mock_post):
         import requests as real_requests
         mock_post.side_effect = real_requests.exceptions.ConnectionError("down")
-        adapter = ElevenLabsTTSAdapter(api_key="k")
+        adapter = ElevenLabsTTSAdapter(api_key="k", model_id="test-model")
         with pytest.raises(SETTServiceAdapterError) as exc_info:
             adapter.synthesize("hello")
         assert "ElevenLabs" in str(exc_info.value)
@@ -162,7 +163,7 @@ class TestElevenLabsTTSAdapterErrorHandling:
         """
         import requests as real_requests
         mock_post.side_effect = real_requests.exceptions.Timeout("timed out")
-        adapter = ElevenLabsTTSAdapter(api_key="k")
+        adapter = ElevenLabsTTSAdapter(api_key="k", model_id="test-model")
         try:
             adapter.synthesize("hello")
             assert False, "should have raised"

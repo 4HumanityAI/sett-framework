@@ -14,6 +14,7 @@ from sett.core_ruler.adapter import (
     ConnectivityRequirement,
     adapter_call_scope,
     normalized_adapter_error,
+    required_model,
 )
 from sett.core_ruler.lifecycle import pop_lifecycle_kwargs
 from sett.exceptions import (
@@ -175,13 +176,16 @@ class LocalSTTAdapter(STTBase):
     def __init__(
         self,
         *,
-        model_size: str = "small",
+        model_size: str | None = None,
         device: str = "cpu",
         compute_type: str = "int8",
         model_factory: Callable[..., Any] | None = None,
     ) -> None:
         """Configure a faster-whisper model while deferring model loading."""
-        self._model_size = model_size
+        self._model_size = required_model(
+            model_size, error_type=SETTServiceAdapterError, provider="faster_whisper",
+            adapter_name=type(self).__name__, parameter="model_size",
+        )
         self._device = device
         self._compute_type = compute_type
         self._model_factory = model_factory

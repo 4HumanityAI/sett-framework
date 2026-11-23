@@ -67,6 +67,7 @@ from sett.exceptions import (
     SETTConfigurationError,
     SETTTimeoutError,
     SETTValidationError,
+    _safe_cancellation_reason,
 )
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -195,7 +196,7 @@ class ExecutionControlRegistry:
                 is still that same node as far as any of its still-live
                 children are concerned: overwriting it here would let a
                 child's later eviction walk up into a control that never
-                actually parented it. M-04 (severe audit): this used to
+                actually parented it. This used to
                 check only ``not existing.released``, so a run_id retained
                 purely because its subtree was still alive could be
                 silently reused for an unrelated registration.
@@ -358,7 +359,7 @@ class ExecutionControlRegistry:
                 node = self._nodes.get(current)
                 if node is None or node.event.is_set():
                     continue
-                node.reason = reason
+                node.reason = _safe_cancellation_reason(reason)
                 node.cause_event_id = cause_event_id
                 node.cancelled_run_id = run_id
                 node.event.set()
@@ -1029,6 +1030,9 @@ class ExecutionControl:
         ``cause_event_id``, at the exact event where somebody asked for
         this to stop, not merely at the fact that it stopped.
         """
+        if not isinstance(reason, str) or not reason.strip():
+            raise SETTValidationError("Cancellation reason must be a non-empty string.")
+        reason = _safe_cancellation_reason(reason)
         recorded_cause = cause_event_id
         if not self.is_cancelled:
             # Pre-checked so that repeated cancel() calls do not each add

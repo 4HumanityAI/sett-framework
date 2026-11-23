@@ -10,8 +10,7 @@ as configuration metadata for human inspection; they do not enter the
 numeric score and are not copied into emitted audit entries. Scoring is
 owned by ``ContextAnalyzer``.
 
-Directly inspired by an early prototype's moral_eval.py: generalized into a
-reusable ruleset system that any SETT deployment can customize.
+The ruleset is reusable, and any SETT deployment can customize it.
 
 The guiding principle: "Do not cause direct or indirect harm to human beings."
 """

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from typing import Any
 
 import pytest
@@ -30,10 +32,19 @@ from sett import (
     SETTPersistenceError,
     SETTValidationError,
     StrictJSONAuthorizationFingerprint,
+    SystemAuthorizationClock,
 )
+from sett._governance.validation import canonical_json_bytes
 from sett.audit_ruler.closure import AuditClosureStatus
 from sett.audit_ruler.integrity import Sha256IntegrityPolicy
 from sett.audit_ruler.trace import TraceRecorder
+from sett.authorization_ruler import (
+    PolicyApplicability,
+    PolicyApplicabilityState,
+    PolicyBinding,
+    PolicyOrigin,
+    PolicySelection,
+)
 from sett.persistence import (
     AuditGapPolicy,
     DurabilityLevel,
@@ -43,6 +54,125 @@ from sett.persistence import (
     PersistencePolicy,
     decode_trace_evidence_frame,
 )
+from sett.policy_ruler import PolicyRuler
+from sett.policy_ruler._handoff import PRODUCED_SLOT_NAMES, VerifiedStateSlot
+
+ENTRY_CHECKPOINT = "test_fixture.entry"
+
+
+def declared_binding(policy_id: str) -> PolicyBinding:
+    """Build one neutral declared binding for a test policy."""
+    return PolicyBinding(
+        policy_id=policy_id,
+        policy_version="1",
+        contract_version="2.0",
+        origins=[
+            PolicyOrigin(
+                requirement_id="test_fixture.requirement",
+                requirement_revision="1",
+                layer_id="test_fixture.layer",
+                source=None,
+                source_absence_reason="Synthetic test fixture",
+            )
+        ],
+        profile_id=None,
+        profile_revision=None,
+    )
+
+
+class SingleSelectionResolver:
+    """Declare one required policy for whichever action is authorized."""
+
+    resolver_id = "test_fixture.resolver"
+
+    def __init__(self, policy_id: str) -> None:
+        self.binding = declared_binding(policy_id)
+
+    def resolve(self, request: AuthorizationRequest) -> PolicySelection:
+        """Return the declared selection for this exact action."""
+        return PolicySelection(
+            selection_id="test_fixture.selection",
+            selection_revision="1",
+            contract_version="2.0",
+            authority_ref="test_fixture.authority",
+            effective_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+            action_id=request.action_id,
+            action_type=request.action_type,
+            required=[self.binding],
+            informative=[],
+            applicability=[
+                PolicyApplicability(
+                    policy_id=self.binding.policy_id,
+                    policy_version=self.binding.policy_version,
+                    state=PolicyApplicabilityState.APPLIES,
+                    justification="Synthetic test declaration",
+                    fact_names=[],
+                    evidence_refs=[],
+                )
+            ],
+            facts={},
+        )
+
+
+class SyntheticStateProducer:
+    """A test-only producer for a slot whose real adapter is not built."""
+
+    schema_revision = "1"
+
+    def __init__(self, slot: str) -> None:
+        self.slot = slot
+        self.producer_id = "test_fixture.producer." + slot
+
+    def produce(self, context: Any) -> VerifiedStateSlot:
+        """Return one synthetic complete record for this slot."""
+        value_bytes = b"{}"
+        if self.slot == "conditions":
+            value_bytes = canonical_json_bytes({
+                "inventory": json.loads(context.condition_inventory),
+                "observations": {},
+                "test_fixture_value_hex": value_bytes.hex(),
+            }, field="synthetic condition state")
+        return VerifiedStateSlot(
+            slot=self.slot,
+            producer_id=self.producer_id,
+            schema_revision=self.schema_revision,
+            epoch=0,
+            action_id=context.request.action_id,
+            checkpoint_id=context.checkpoint_id,
+            required_keys=(),
+            observed_keys=(),
+            value_bytes=value_bytes,
+            evidence_refs=(),
+            valid_until=None,
+        )
+
+    def confirm(self, slot: VerifiedStateSlot) -> bool:
+        """Report that the synthetic record is still current."""
+        return True
+
+
+def configured_authorization(policy_id: str) -> AuthorizationRuler:
+    """Build one authorization issuer over its own configured policy owner."""
+    evidence = InMemoryAuthorizationEvidence()
+    owner = PolicyRuler(
+        ruler_id="test_fixture.policy_ruler",
+        entry_checkpoint_id=ENTRY_CHECKPOINT,
+        evaluation_ttl_seconds=3_600,
+        max_live_evaluations=256,
+        clock=SystemAuthorizationClock(),
+        evidence_sink=evidence,
+        selection_resolver=SingleSelectionResolver(policy_id),
+    )
+    for name in PRODUCED_SLOT_NAMES:
+        owner._register_state_producer(SyntheticStateProducer(name))
+    return AuthorizationRuler(
+        issuer_id="issuer.local",
+        receipt_ttl_seconds=60,
+        fingerprint_policy=StrictJSONAuthorizationFingerprint(),
+        receipt_store=InMemoryAuthorizationReceiptStore(),
+        evidence_sink=evidence,
+        policy_ruler=owner,
+    )
 
 
 class StaticPolicy:
@@ -112,14 +242,12 @@ def configured_executor(
 ) -> tuple[SETTExecutor, SETTOrchestrator, AuthoritativeResolver]:
     """Build one attached executor with deterministic authorization."""
 
-    ruler = AuthorizationRuler(
-        issuer_id="issuer.local",
-        receipt_ttl_seconds=60,
-        fingerprint_policy=StrictJSONAuthorizationFingerprint(),
-        receipt_store=InMemoryAuthorizationReceiptStore(),
-        evidence_sink=InMemoryAuthorizationEvidence(),
+    ruler = configured_authorization(decision.policy_id)
+    ruler.register_policy(
+        "record",
+        StaticPolicy(decision.policy_id, decision),
+        binding=declared_binding(decision.policy_id),
     )
-    ruler.register_policy("record", StaticPolicy(decision.policy_id, decision))
     selected_resolver = resolver or AuthoritativeResolver()
     executor = SETTExecutor(
         authorization_ruler=ruler,
@@ -145,13 +273,7 @@ def test_execution_ruler_preserves_public_and_historical_imports() -> None:
 
 
 def test_authorization_configuration_is_all_or_nothing() -> None:
-    ruler = AuthorizationRuler(
-        issuer_id="issuer.local",
-        receipt_ttl_seconds=60,
-        fingerprint_policy=StrictJSONAuthorizationFingerprint(),
-        receipt_store=InMemoryAuthorizationReceiptStore(),
-        evidence_sink=InMemoryAuthorizationEvidence(),
-    )
+    ruler = configured_authorization("policy.allow")
 
     with pytest.raises(SETTValidationError):
         SETTExecutor(authorization_ruler=ruler)
@@ -162,7 +284,7 @@ def test_authorization_configuration_is_all_or_nothing() -> None:
 
 def test_grant_is_verified_before_handler_authorization() -> None:
     executor, orchestrator, resolver = configured_executor(
-        PolicyDecision.grant("policy.allow")
+        PolicyDecision.grant("policy.allow", conditions=(), review_obligations=())
     )
     calls: list[dict[str, Any]] = []
     executor.register_handler("record", lambda payload: calls.append(payload) or "ok")
@@ -184,7 +306,7 @@ def test_grant_is_verified_before_handler_authorization() -> None:
 
 def test_denial_never_reaches_the_handler() -> None:
     executor, orchestrator, resolver = configured_executor(
-        PolicyDecision.deny("policy.deny", reason_codes=("policy.denied",))
+        PolicyDecision.deny("policy.deny", reason_codes=("policy.denied",), conditions=(), review_obligations=())
     )
     calls: list[dict[str, Any]] = []
     executor.register_handler("record", calls.append)
@@ -203,7 +325,7 @@ def test_denial_never_reaches_the_handler() -> None:
 
 def test_raw_approval_evidence_never_reaches_execution_trace() -> None:
     executor, orchestrator, resolver = configured_executor(
-        PolicyDecision.grant("policy.allow")
+        PolicyDecision.grant("policy.allow", conditions=(), review_obligations=())
     )
     calls: list[dict[str, Any]] = []
     executor.register_handler("record", calls.append)
@@ -236,7 +358,7 @@ def test_ethics_rejection_happens_before_authorization_resolution() -> None:
         warn_threshold=0.1,
     )
     executor, orchestrator, _resolver = configured_executor(
-        PolicyDecision.grant("policy.allow"),
+        PolicyDecision.grant("policy.allow", conditions=(), review_obligations=()),
         resolver=resolver,
         ethical_filter=EthicalFilter(ruleset=strict),
     )
@@ -259,7 +381,7 @@ def test_ethics_rejection_happens_before_authorization_resolution() -> None:
 def test_resolver_cannot_replace_the_detached_payload() -> None:
     resolver = AuthoritativeResolver(replace_payload={"value": 2})
     executor, _orchestrator, _resolver = configured_executor(
-        PolicyDecision.grant("policy.allow"),
+        PolicyDecision.grant("policy.allow", conditions=(), review_obligations=()),
         resolver=resolver,
     )
     calls: list[dict[str, Any]] = []
@@ -274,7 +396,7 @@ def test_resolver_cannot_replace_the_detached_payload() -> None:
 
 def test_exporter_cannot_switch_authority_after_handler_resolution() -> None:
     executor, orchestrator, resolver = configured_executor(
-        PolicyDecision.grant("policy.allow")
+        PolicyDecision.grant("policy.allow", conditions=(), review_obligations=())
     )
     calls: list[dict[str, Any]] = []
     executor.register_handler("restricted", calls.append)
@@ -312,7 +434,7 @@ def test_resolver_cannot_change_payload_scalar_representation(
 ) -> None:
     resolver = AuthoritativeResolver(replace_payload={"value": replacement})
     executor, _orchestrator, _resolver = configured_executor(
-        PolicyDecision.grant("policy.allow"),
+        PolicyDecision.grant("policy.allow", conditions=(), review_obligations=()),
         resolver=resolver,
     )
     calls: list[dict[str, Any]] = []
@@ -350,6 +472,8 @@ def test_controlled_submission_declares_controlled_authority() -> None:
         PolicyDecision.grant(
             "policy.replay",
             receipt_use=ReceiptUse.CONTROLLED_IDEMPOTENT_REPLAY,
+            conditions=(),
+            review_obligations=(),
         ),
         resolver=resolver,
     )
@@ -422,7 +546,7 @@ def durable_effect_executor(stream: AuthorizationBarrierStream):
         persistence_policy=policy,
     )
     executor, orchestrator, _resolver = configured_executor(
-        PolicyDecision.grant("policy.allow"),
+        PolicyDecision.grant("policy.allow", conditions=(), review_obligations=()),
         orchestrator=orchestrator,
     )
     orchestrator.register_agent(EffectAgent())

@@ -54,7 +54,7 @@ class BiometricReading:
     )
 
     def __post_init__(self) -> None:
-        """F14 fix (defensive audit #2).
+        """Validate that every vital sign is a real number.
 
         A mistyped vital sign (a string, a list, anything not a real
         number) used to construct successfully and only fail later, with

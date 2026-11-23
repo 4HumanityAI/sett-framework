@@ -71,7 +71,7 @@ def _fake_google_cloud_sys_modules(submodule_name: str, submodule_mock: MagicMoc
     google_cloud_mock = MagicMock(name="google.cloud")
     setattr(google_cloud_mock, submodule_name, submodule_mock)
 
-    # F18 fix: the adapter now loads credentials explicitly via
+    # The adapter now loads credentials explicitly via
     # google.oauth2.service_account instead of mutating os.environ, so
     # that import must resolve too, with the same parent-attribute caveat as
     # google.cloud above.
@@ -193,7 +193,7 @@ class TestGoogleTTSAdapterSynthesize:
     def test_credentials_path_argument_builds_explicit_credentials(
         self, monkeypatch
     ):
-        """F18 regression (defensive audit #2): see the matching test in
+        """Regression: see the matching test in
         test_google_sentiment_adapter.py for the full rationale. The
         environment must stay untouched and the client must receive an
         explicit `credentials=` built from the given path.
@@ -228,7 +228,7 @@ class TestGoogleTTSAdapterSynthesize:
             adapter = GoogleTTSAdapter()
             with pytest.raises(SETTServiceAdapterError) as exc_info:
                 adapter.synthesize("hola")
-            # L-01: the provider's own text is reachable through the
+            # The provider's own text is reachable through the
             # chained cause, never through the public message.
             assert "quota exceeded" not in str(exc_info.value)
             assert "google_cloud_tts synthesize failed" in str(exc_info.value)
@@ -267,7 +267,7 @@ class TestGoogleSTTAdapterTranscribe:
             adapter = GoogleSTTAdapter()
             with pytest.raises(SETTServiceAdapterError) as exc_info:
                 adapter.transcribe(b"bad-bytes")
-            # L-01: the provider's own text is reachable through the
+            # The provider's own text is reachable through the
             # chained cause, never through the public message.
             assert "bad audio encoding" not in str(exc_info.value)
             assert "google_cloud_stt transcribe failed" in str(exc_info.value)
@@ -276,7 +276,7 @@ class TestGoogleSTTAdapterTranscribe:
     def test_credentials_path_argument_builds_explicit_credentials(
         self, monkeypatch
     ):
-        """F18 regression (defensive audit #2), STT side."""
+        """Regression, STT side: credentials are loaded without touching os.environ."""
         monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
         fake_module, _ = _fake_speech_module()
         modules = _fake_google_cloud_sys_modules("speech", fake_module)

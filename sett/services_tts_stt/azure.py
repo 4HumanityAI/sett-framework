@@ -19,8 +19,10 @@ from sett.exceptions import SETTServiceAdapterError
 from sett.services_tts_stt._http import (
     checked_request,
     credential,
+    host_label,
     require_requests,
     response_json,
+    validated_endpoint,
 )
 from sett.services_tts_stt._language import resolve_language_code
 from sett.services_tts_stt.base import STTBase, TTSBase
@@ -36,11 +38,48 @@ def _speech_key(value: str | None, adapter_name: str) -> str:
 
 
 def _region(value: str | None, adapter_name: str) -> str:
-    return credential(
-        value,
-        "AZURE_SPEECH_REGION",
+    """Resolve the region and require it to be one host label.
+
+    The region is interpolated into the host name the subscription key is
+    sent to. A value that is not a single label could name another host,
+    so it is refused here instead of being sent anywhere. A different
+    host is configured deliberately through ``endpoint``.
+    """
+    return host_label(
+        credential(
+            value,
+            "AZURE_SPEECH_REGION",
+            provider="azure_speech",
+            adapter_name=adapter_name,
+        ),
         provider="azure_speech",
         adapter_name=adapter_name,
+        parameter="region",
+    )
+
+
+def _endpoint(value: str | None, default: str, adapter_name: str) -> str:
+    if not value:
+        return default
+    return validated_endpoint(
+        value, provider="azure_speech", adapter_name=adapter_name
+    )
+
+
+def _audio_container(output_format: str) -> str:
+    """Classify provider format families without claiming codec validation."""
+    if isinstance(output_format, str) and not any(
+        ord(char) <= 32 or ord(char) == 127 for char in output_format
+    ):
+        if output_format.startswith("audio-") and output_format.endswith("-mp3"):
+            return "mp3"
+        for prefix, container in (("riff-", "wav"), ("ogg-", "ogg"), ("webm-", "webm"), ("raw-", "pcm")):
+            if output_format.startswith(prefix):
+                return container
+    raise SETTServiceAdapterError(
+        "Azure output_format must name a supported audio container family.",
+        kind=AdapterErrorKind.CONFIGURATION,
+        provider="azure_speech", reason_code="adapter.output_format_invalid",
     )
 
 
@@ -77,9 +116,12 @@ class AzureTTSAdapter(TTSBase):
             adapter_name=type(self).__name__,
             operation="configure",
         )
+        self._audio_format = _audio_container(output_format)
         self._output_format = output_format
-        self._endpoint = endpoint or (
-            f"https://{self._region}.tts.speech.microsoft.com/cognitiveservices/v1"
+        self._endpoint = _endpoint(
+            endpoint,
+            f"https://{self._region}.tts.speech.microsoft.com/cognitiveservices/v1",
+            type(self).__name__,
         )
         self._timeout_seconds = validate_duration_seconds(
             timeout_seconds, name="timeout_seconds"
@@ -88,7 +130,7 @@ class AzureTTSAdapter(TTSBase):
     @property
     def audio_format(self) -> str:
         """Return the container implied by the configured Azure output format."""
-        return "mp3" if "mp3" in self._output_format else "wav"
+        return self._audio_format
 
     @property
     def capabilities(self) -> AdapterCapabilities:
@@ -100,7 +142,10 @@ class AzureTTSAdapter(TTSBase):
             partial_results=CapabilitySupport.NO,
             connectivity=ConnectivityRequirement.REMOTE_SERVICE,
             input_formats=("text/plain",),
-            output_formats=("audio/mpeg", "audio/wav"),
+            output_formats=({
+                "mp3": "audio/mpeg", "wav": "audio/wav", "ogg": "audio/ogg",
+                "webm": "audio/webm", "pcm": "audio/pcm",
+            }[self.audio_format],),
             metadata={"request_format": "ssml"},
         )
 
@@ -118,7 +163,13 @@ class AzureTTSAdapter(TTSBase):
                 adapter_name=type(self).__name__,
                 operation="synthesize",
             )
-            output_format = str(kwargs.get("output_format", self._output_format))
+            output_format = kwargs.get("output_format", self._output_format)
+            if _audio_container(output_format) != self.audio_format:
+                raise SETTServiceAdapterError(
+                    "A per-call output_format cannot change the configured container.",
+                    kind=AdapterErrorKind.CONFIGURATION,
+                    provider="azure_speech", reason_code="adapter.output_format_invalid",
+                )
             ssml = (
                 f"<speak version='1.0' xml:lang={quoteattr(language_code)}>"
                 f"<voice name={quoteattr(voice)}>{escape(text)}</voice></speak>"
@@ -175,9 +226,11 @@ class AzureSTTAdapter(STTBase):
             adapter_name=type(self).__name__,
             operation="configure",
         )
-        self._endpoint = endpoint or (
+        self._endpoint = _endpoint(
+            endpoint,
             f"https://{self._region}.stt.speech.microsoft.com/"
-            "speech/recognition/conversation/cognitiveservices/v1"
+            "speech/recognition/conversation/cognitiveservices/v1",
+            type(self).__name__,
         )
         self._timeout_seconds = validate_duration_seconds(
             timeout_seconds, name="timeout_seconds"

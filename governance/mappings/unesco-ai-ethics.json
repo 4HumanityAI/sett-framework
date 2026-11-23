@@ -1,0 +1,89 @@
+{
+  "format": "sett.working_correspondence",
+  "format_version": 1,
+  "record_id": "unesco-ai-ethics",
+  "revision": 1,
+  "instrument": {
+    "title": "Recommendation on the Ethics of Artificial Intelligence",
+    "publisher": "UNESCO",
+    "edition": "Adopted 23 November 2021; English publication of 2022",
+    "identifiers": [
+      "ark:/48223/pf0000381137",
+      "SHS/BIO/PI/2021/1"
+    ],
+    "capture_sha256": "317c2af315a8c767f8900fca35bdd2467eb8b9b57fc0791ae686d6b376602e12",
+    "freshness": {
+      "state": "current",
+      "checked_on": "2026-10-18",
+      "note": null
+    }
+  },
+  "requirements": [
+    {
+      "requirement_id": "paragraph-43",
+      "revision": "2",
+      "locator": "Paragraph 43",
+      "interpretation": "Retain origin links for technical records and keep institutional evidence requirements separately visible; do not label an audit trail as completed institutional accountability.",
+      "criterion": "Distinct origins survive even when one technical mechanism contributes to both. Records can identify later human or external evidence requirements without declaring them satisfied.",
+      "limits": "SETT provides technical identity and records only. The complete institutional measures, whistle-blower protection, impact assessment and ongoing audit practice are not reduced to a runtime predicate.",
+      "approved_sha256": "d1086bab0cc55bf8ab4e83056d029b6f6b3409bc0bd09ccfd1fa2f5141085278",
+      "capability": [
+        {
+          "mechanism": "Distinct origins survive composition and recording, down to the requirements each condition covers.",
+          "reference": "docs/decision_records.md",
+          "evidence": [
+            "tests/test_policy_origins.py::test_related_conditions_keep_their_own_requirements",
+            "tests/test_policy_v2_models.py::test_shared_source_preserves_requirements_and_layers"
+          ]
+        },
+        {
+          "mechanism": "The governance journal, the trace and recovery keep what happened, including an effect that may or may not have happened.",
+          "reference": "docs/governance_recovery.md",
+          "evidence": [
+            "tests/test_governance_recovery.py::test_a_completed_effect_is_known",
+            "tests/test_governance_recovery.py::test_stopped_while_the_handler_runs"
+          ]
+        },
+        {
+          "mechanism": "Explanations keep the verdicts apart and never claim that an institution's requirement is met.",
+          "reference": "docs/explanations.md",
+          "evidence": [
+            "tests/test_policy_explanations.py::test_the_ethics_verdict_is_kept_apart_from_authorization",
+            "tests/test_policy_explanations.py::test_an_uncertain_effect_is_never_reported_as_done"
+          ]
+        }
+      ],
+      "applicability": "deployment_decides",
+      "configuration": "deployment_decides",
+      "institutional_outcome": "not_assessed_by_sett",
+      "left_to_deployment": [
+        "Accountability arrangements.",
+        "Impact assessment.",
+        "Protection of whistle-blowers.",
+        "Ongoing audit practice."
+      ]
+    }
+  ],
+  "comparisons": [
+    {
+      "requirements": [
+        "unesco-ai-ethics/paragraph-43",
+        "nist-ai-rmf/govern-1-1"
+      ],
+      "relation": "unresolved"
+    },
+    {
+      "requirements": [
+        "unesco-ai-ethics/paragraph-43",
+        "eu-ai-act/article-14"
+      ],
+      "relation": "unresolved"
+    }
+  ],
+  "approval": {
+    "state": "approved",
+    "revision": 1,
+    "digest": "2a806fd12885c28d253c75f1f4b0a2c65f8cbc8ab8ba4826c00607fc71b7a584",
+    "approved_on": "2026-10-18"
+  }
+}

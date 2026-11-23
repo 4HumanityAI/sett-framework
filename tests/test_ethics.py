@@ -5,7 +5,7 @@ Tests for the full three-layer hybrid risk evaluation:
 
   Layer 1: EthicalFilter (action harm score)
   Layer 2: RiskProfile (three-pillar user assessment)
-  Layer 3: EnvironmentalContext (RiskLevel 0–5)
+  Layer 3: EnvironmentalContext (RiskLevel 0 to 5)
 
 Key contracts:
   - REJECT always raises SETTEthicalFilterRejectedError
@@ -103,7 +103,7 @@ class TestRiskProfile:
         assert abs(p2.collateral_damage_potential - 0.2) < 0.001
 
     def test_timestamp_survives_the_round_trip(self):
-        """F12 regression (defensive audit #2).
+        """Regression: the timestamp survives the round trip.
 
         to_dict() always serializes `timestamp`, but from_dict() used to
         ignore it and mint a fresh one instead: every roundtrip through
@@ -116,7 +116,7 @@ class TestRiskProfile:
         assert p2.timestamp == p.timestamp
 
     def test_weights_that_do_not_sum_to_one_are_rejected(self):
-        """F13 regression (defensive audit #2): the composite_score
+        """Regression: the composite_score
         invariant (always in [0.0, 1.0]) depends on the weights summing to
         1.0. An unvalidated custom weighting could silently break it.
         """
@@ -141,7 +141,7 @@ class TestRiskProfile:
             )
 
     def test_weights_cannot_be_mutated_after_construction(self):
-        """Blocking item assignment closes the other half of F13: even a
+        """Blocking item assignment closes the other half of the previous test: even a
         validated set of weights must not drift after construction.
         """
         p = RiskProfile(emotional_instability=0.5)
@@ -208,7 +208,7 @@ class TestEnvironmentalContext:
         assert not ctx.requires_response
 
     def test_critical_context_should_notify_emergency(self):
-        """F20 (defensive audit #2): renamed from auto_notify_emergency,
+        """Renamed from auto_notify_emergency,
         whose name implied SETT automatically performs the notification.
         This field is only a recommendation derived from risk_level."""
         ctx = EnvironmentalContext(
@@ -254,7 +254,7 @@ class TestEnvironmentalContext:
         assert ctx2.source_domain == "health"
 
     def test_timestamp_survives_the_round_trip(self):
-        """F03 regression (defensive audit #2).
+        """Regression: the timestamp survives the round trip.
 
         to_dict() always serializes `timestamp`, but from_dict() used to
         ignore it and mint a fresh one instead: every read through
@@ -637,7 +637,7 @@ class TestThreeLayerIntegration:
             )
 
     def test_a_careless_expert_cannot_publish_a_raw_risk_profile(self):
-        """F02 regression (defensive audit #2).
+        """Regression: a careless Expert cannot publish a raw RiskProfile.
 
         The test above only proves that a *cooperative* Expert, one that
         remembers to strip everything sensitive before returning, keeps
@@ -674,7 +674,7 @@ class TestThreeLayerIntegration:
         assert "careless" not in universal
 
     def test_an_analyzer_that_mutates_context_cannot_taint_stored_memory(self):
-        """F10 regression (defensive audit #2).
+        """Regression: an analyzer that mutates its context cannot taint memory.
 
         UniversalMemory.update() used to hand the filter a shallow copy
         (``dict(result)``) of the published result: nested dicts/lists
@@ -752,7 +752,7 @@ class TestThreeLayerIntegration:
 
 
 # ─────────────────────────────────────────────────────────────────────
-# AUD4-ROB-01: Unicode canonicalization of the Layer 1 keyword matcher
+# Unicode canonicalization of the Layer 1 keyword matcher
 # ─────────────────────────────────────────────────────────────────────
 
 class TestKeywordCanonicalizationPolicy:

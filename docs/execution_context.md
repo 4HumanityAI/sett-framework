@@ -2,7 +2,6 @@
 
 Status: current design with preserved historical rationale  
 Introduced: SETT Framework v0.11.0  
-Last reviewed: SETT Framework v0.13.1  
 Original baseline: SETT Framework v0.10.1  
 Scope: framework-generic execution identity, causal trace propagation, safe trace export, and backward compatibility
 
@@ -32,7 +31,7 @@ The v0.10.1 public extension contract requires applications to override:
 - `SETTAgent.process(input_data)`
 - `SETTExpert.resolve(context)`
 
-Changing those abstract signatures would force a coordinated migration in every consumer, including the current companion-assistant reference application. Conversely, keeping context only as optional metadata on `SETTOrchestrator.process()` would not propagate it through custom agent and expert code and would fail the roadmap gate.
+Changing those abstract signatures would force a coordinated migration in every consumer. Conversely, keeping context only as optional metadata on `SETTOrchestrator.process()` would not propagate it through custom agent and expert code and would fail the roadmap gate.
 
 The design therefore uses two complementary paths:
 
@@ -139,6 +138,7 @@ Initial event kinds:
 - `policy.evaluated`
 - `action.proposed`, `action.approved`, `action.rejected`, `action.blocked`
 - `handler.authorized`, `handler.started`, `handler.completed`, `handler.failed`, `handler.blocked`
+- `handler.checkpoint_passed`, `handler.checkpoint_blocked`, `handler.checkpoint_missed`
 
 Reason code examples:
 
@@ -191,8 +191,15 @@ class TraceRecorder:
 Exporter failures do not alter ordinary diagnostic results. The
 `handler.authorized` event is the committed pre-effect boundary: if an exporter
 fails there, SETT records `handler.blocked`, raises `SETTConfigurationError`,
-and does not record `handler.started` or invoke the handler. Exporters receive
-defensive sanitized dictionaries, never component objects.
+and does not record `handler.started` or invoke the handler. With
+authorization configured, a final gate runs after those exporters; if the
+consumed grant went stale, SETT records `handler.blocked` with the reason
+code and raises `SETTAuthorizationError`. Exporters receive defensive
+sanitized dictionaries, never component objects.
+
+The start event opens the dispatch span. If the entry check rejects after
+the start exporters return, `handler.entry_blocked` closes `handler.started`
+and the handler is never called.
 
 ## 4. Context creation and propagation
 
@@ -334,6 +341,8 @@ It never reads `PrivateMemory`.
 - evidence references to prior event IDs.
 
 The current `FilterVerdict` remains the return contract. `PolicyDecision` is not pulled forward from v0.15.0.
+
+**Later.** v0.15.0 added `PolicyDecision` for authorization policies; `EthicalFilter.evaluate()` still returns `FilterVerdict`.
 
 ### Action and Executor
 

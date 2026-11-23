@@ -13,6 +13,7 @@ complete entry point for catching anything the framework raises.
 """
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover - typing only, never imported at runtime
@@ -40,11 +41,11 @@ def bound_provider_error_message(
     SETT no longer uses this to build its own adapter messages, and this
     paragraph records why rather than deleting the history (#16). Adapters
     historically embedded ``str(e)`` from the provider SDK into their own
-    error message with no limit (F29, defensive audit #2); bounding it here
+    error message with no limit; bounding it here
     capped the length. The v0.14.0 audit then showed what bounding never
     addressed: an authentication header survived truncation intact and was
     recoverable from ``str(error)``, which ordinary application logging
-    formats by default (L-01). ``normalized_adapter_error()`` now composes
+    formats by default. ``normalized_adapter_error()`` now composes
     the public message from controlled identifiers only, and the provider's
     text stays on ``__cause__``.
 
@@ -125,8 +126,8 @@ class SETTEthicalFilterWarningError(SETTError):
     """
     Reserved for a future EthicalFilter warning path.
 
-    Not currently raised anywhere in this framework (F23, defensive
-    audit #2): a WARN verdict today is allowed through and logged via
+    Not currently raised anywhere in this framework:
+    a WARN verdict today is allowed through and logged via
     the standard `logging` module, not raised as an exception. This
     class stays public and importable so that code written against a
     future warning-as-exception path does not need to change its
@@ -266,6 +267,13 @@ class SETTConfigurationError(SETTError):
         self.trace_event_id = trace_event_id
 
 
+def _safe_cancellation_reason(reason: str | None) -> str:
+    """Keep cancellation vocabulary bounded and exclude free-form messages."""
+    if isinstance(reason, str) and re.fullmatch(r"[a-z][a-z0-9_.]{0,127}", reason):
+        return reason
+    return "execution.cancelled_by_caller"
+
+
 class SETTCancelledError(SETTError):
     """
     Raised when a caller observes cancellation on an ExecutionControl it
@@ -302,7 +310,7 @@ class SETTCancelledError(SETTError):
         """Name which run was cancelled, why, and the event that asked."""
         super().__init__(message)
         self.run_id = run_id
-        self.reason = reason
+        self.reason = None if reason is None else _safe_cancellation_reason(reason)
         self.cause_event_id = cause_event_id
 
 
@@ -460,7 +468,30 @@ class SETTAuditClosureError(SETTError):
 
 
 class SETTAuthorizationError(SETTError):
-    """Base failure raised by the authorization boundary."""
+    """Base failure raised by the authorization boundary.
+
+    ``policy_observations`` is None outside its covered initial evaluation
+    paths, or a possibly partial tuple of admitted policy ID/version/verdict
+    rows. ``policy_observation_reason_codes`` has the same length and order
+    and holds the reason codes each of those policies returned; it is None
+    exactly when ``policy_observations`` is None.
+
+    ``failed_condition`` is the ``(policy_id, policy_version,
+    condition_id)`` on which condition verification stopped, and
+    ``attempted_conditions`` lists, in verification order, the conditions
+    whose verifier was called. Both are None unless verification stopped on
+    one specific condition.
+
+    ``authorization_attempt_id`` identifies the call to ``authorize()`` or
+    ``verify_and_consume()`` that raised the error; its evidence events carry
+    the same value. ``original_reason_code`` is the code of the failure that
+    was being reported when writing its evidence event failed, and is None
+    otherwise.
+
+    All of these are diagnostic data, not authority or a durable audit
+    record. The framework never reads them back, and they are not added to
+    the message, ``str()`` or ``repr()``.
+    """
 
     def __init__(
         self,
@@ -475,10 +506,38 @@ class SETTAuthorizationError(SETTError):
         self.reason_code = reason_code
         self.verdict = verdict
         self.receipt_id = receipt_id
+        self.policy_observations: tuple[tuple[str, str, str], ...] | None = None
+        self.policy_observation_reason_codes: tuple[tuple[str, ...], ...] | None = None
+        self.failed_condition: tuple[str, str, str] | None = None
+        self.attempted_conditions: tuple[tuple[str, str, str], ...] | None = None
+        self.authorization_attempt_id: str | None = None
+        self.original_reason_code: str | None = None
 
 
 class SETTAuthorizationConfigurationError(SETTAuthorizationError):
     """Authorization could not produce a trustworthy decision."""
+
+
+class SETTPolicyConfigurationError(SETTConfigurationError):
+    """
+    Raised when the policy domain cannot establish a valid binding.
+
+    This is a configuration failure, not an authorization verdict: it
+    inherits ``SETTConfigurationError`` deliberately so that catching an
+    authorization error never catches it, and it carries no receipt
+    identity and no ``verdict`` of its own. ``reason_code`` is the stable
+    machine-readable reason; the message is supplied by the raising
+    boundary, which is responsible for keeping it free of submitted
+    values. This constructor performs no policy evaluation and grants no
+    authority.
+
+    Attributes:
+        reason_code (str): Stable machine-readable failure reason.
+    """
+
+    def __init__(self, message: str, *, reason_code: str) -> None:
+        """Preserve the stable policy failure reason without a verdict."""
+        super().__init__(message, reason_code=reason_code)
 
 
 class SETTValidationError(SETTError, ValueError):

@@ -1,33 +1,21 @@
-"""Narrow protocols used by the Authorization Ruler."""
+"""Authorization protocols and same-object compatibility imports."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
 
-from sett.authorization_ruler.models import (
+from sett._governance.protocols import AuthorizationClock as AuthorizationClock
+from sett._governance.values import (
     ApprovalInput,
     AuthorizationRequest,
     ExecutionMode,
-    PolicyDecision,
     VerifiedApproval,
 )
-
-
-@runtime_checkable
-class AuthorizationPolicy(Protocol):
-    """A deterministic policy registered for one exact action type."""
-
-    policy_id: str
-
-    def evaluate(
-        self,
-        request: AuthorizationRequest,
-        verified_approvals: frozenset[VerifiedApproval],
-    ) -> PolicyDecision:
-        """Evaluate one detached request and return this policy's decision."""
-        ...
+from sett.policy_ruler.contracts import AuthorizationPolicy as AuthorizationPolicy
+from sett.policy_ruler.contracts import (
+    PolicySelectionResolver as PolicySelectionResolver,
+)
 
 
 @runtime_checkable
@@ -57,15 +45,6 @@ class AuthorizationFingerprintPolicy(Protocol):
         verified_approvals: frozenset[VerifiedApproval],
     ) -> str:
         """Bind a request and verified authority to a stable identifier."""
-        ...
-
-
-@runtime_checkable
-class AuthorizationClock(Protocol):
-    """An injectable timezone-aware clock."""
-
-    def now(self) -> datetime:
-        """Return the current timezone-aware authorization time."""
         ...
 
 

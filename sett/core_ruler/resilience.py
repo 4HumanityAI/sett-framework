@@ -22,6 +22,7 @@ are enforced below the policy, so no configuration can turn them on.
 """
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -38,6 +39,7 @@ from sett.core_ruler.lifecycle import (
 )
 from sett.exceptions import (
     SETTAdapterError,
+    SETTAuthorizationError,
     SETTCancelledError,
     SETTConfigurationError,
     SETTEthicalFilterRejectedError,
@@ -60,6 +62,8 @@ _NEVER_RETRYABLE: tuple[type[BaseException], ...] = (
     SETTIdempotencyConflictError,
     SETTConfigurationError,
     SETTValidationError,
+    # An authorization block is decided again only by a new submission.
+    SETTAuthorizationError,
 )
 
 
@@ -338,10 +342,46 @@ def is_retryable(error: BaseException, policy: RetryPolicy) -> bool:
     The never-retryable list is checked first and cannot be overridden by
     a policy: listing ``SETTEthicalFilterRejectedError`` in ``retry_on``
     does not make a rejection retryable, it just does not do anything.
+
+    Classification and permission are separate. ``classify_error()``
+    describes the failure, and an adapter that marks its own error as
+    ``retryable`` is describing it too. Neither is permission to repeat an
+    operation: that comes only from the application naming the error type
+    in ``retry_on``. With an empty ``retry_on`` nothing is retryable.
     """
     if isinstance(error, _NEVER_RETRYABLE):
         return False
+    if not policy.retry_on or not isinstance(error, policy.retry_on):
+        return False
     return classify_error(error, policy) is ErrorClass.TRANSIENT
+
+
+def retry_delay_seconds(
+    error: BaseException, policy: RetryPolicy, attempt_number: int
+) -> float | None:
+    """Seconds to wait before the next attempt, or ``None`` to stop.
+
+    A provider may ask for a pause through ``retry_after_seconds``. The
+    request is honoured only inside the budget the application adopted:
+    the wait is never shorter than the provider asked for, and when the
+    provider asks for more than ``max_backoff_seconds`` the answer is
+    ``None``, because waiting longer would exceed the policy and retrying
+    sooner would ignore the provider. A missing, negative, non-finite or
+    non-numeric value is not a provider request and leaves the policy's
+    own backoff in place.
+    """
+    delay = policy.backoff_for(attempt_number)
+    retry_after = getattr(error, "retry_after_seconds", None)
+    if (
+        isinstance(retry_after, bool)
+        or not isinstance(retry_after, (int, float))
+        or not math.isfinite(retry_after)
+        or retry_after <= 0
+    ):
+        return delay
+    if retry_after > policy.max_backoff_seconds:
+        return None
+    return max(delay, float(retry_after))
 
 
 T = TypeVar("T")
@@ -399,10 +439,9 @@ def execute_with_resilience(
                 or not is_retryable(error, policy)
             ):
                 raise
-            delay = policy.backoff_for(attempt)
-            retry_after = getattr(error, "retry_after_seconds", None)
-            if isinstance(retry_after, (int, float)) and retry_after >= 0:
-                delay = max(delay, float(retry_after))
+            delay = retry_delay_seconds(error, policy, attempt)
+            if delay is None:
+                raise
             if control is not None:
                 remaining = control.remaining_seconds()
                 if remaining is not None and delay >= remaining:

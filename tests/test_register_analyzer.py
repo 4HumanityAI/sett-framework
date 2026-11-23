@@ -1,10 +1,7 @@
 """
 SETT Framework: Tests: register_analyzer
 ======================================================
-Tests for per-action-type ContextAnalyzer registration on EthicalFilter
-(resolves the "two projects,
-two ContextAnalyzers" conflict found while building two independent
-prototype applications on top of the same framework).
+Tests for per-action-type ContextAnalyzer registration on EthicalFilter.
 """
 import pytest
 

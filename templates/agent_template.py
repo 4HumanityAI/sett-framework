@@ -35,9 +35,7 @@ class MyAgent(SETTAgent):
         super().__init__(name="MyAgent", domain="my_domain")
 
         # TODO: register each expert this agent coordinates here.
-        # You can have just one, or several: there's no fixed correct
-        # number, it depends on how many distinct tasks your domain
-        # needs. See CONVENTIONS.md once it exists.
+        # Use one expert per distinct task. See docs/SETT_Conventions.md.
         # self.register_expert(MyExpert(name="my_expert"))
 
     def process(self, input_data: dict[str, Any]) -> dict[str, Any]:

@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Callable
 from time import monotonic, sleep
 from typing import Any
+from urllib.parse import urlsplit
 
 from sett.core_ruler.adapter import (
     AdapterErrorKind,
@@ -53,6 +55,116 @@ def credential(
     return resolved
 
 
+_PATH_SEGMENT = re.compile(r"[A-Za-z0-9._~-]+")
+_DNS_LABEL = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?")
+
+
+def _configuration_error(
+    message: str, *, provider: str, adapter_name: str, reason_code: str
+) -> SETTServiceAdapterError:
+    return SETTServiceAdapterError(
+        message,
+        kind=AdapterErrorKind.CONFIGURATION,
+        provider=provider,
+        adapter_name=adapter_name,
+        retryable=False,
+        reason_code=reason_code,
+    )
+
+
+def path_identifier(
+    value: object, *, provider: str, adapter_name: str, parameter: str
+) -> str:
+    """Return ``value`` if it can only ever be one URL path segment.
+
+    The rule is structural, not a guess about a provider's identifier
+    format: the value must consist of the URL "unreserved" characters
+    (letters, digits, ``-``, ``.``, ``_``, ``~``) and must not be a dot
+    segment. Nothing that passes can add a path separator, a query, a
+    fragment, an escape sequence or a control character to the request
+    URL, so the identifier cannot move the request to another resource.
+    """
+    if (
+        isinstance(value, str)
+        and _PATH_SEGMENT.fullmatch(value) is not None
+        and value not in {".", ".."}
+    ):
+        return value
+    raise _configuration_error(
+        f"{adapter_name} {parameter} must be an identifier made of letters, "
+        "digits, '-', '.', '_' or '~'.",
+        provider=provider,
+        adapter_name=adapter_name,
+        reason_code="adapter.configuration_invalid",
+    )
+
+
+def host_label(
+    value: object, *, provider: str, adapter_name: str, parameter: str
+) -> str:
+    """Return ``value`` if it is a single DNS label.
+
+    Used for identifiers that become part of a host name, such as a cloud
+    region. A label cannot contain a dot, a slash, a query, a fragment or
+    user information, so it can select a host inside the provider's
+    domain but cannot replace that domain.
+    """
+    if isinstance(value, str) and _DNS_LABEL.fullmatch(value) is not None:
+        return value
+    raise _configuration_error(
+        f"{adapter_name} {parameter} must be a single host label: letters, "
+        "digits and '-', for example 'westeurope'.",
+        provider=provider,
+        adapter_name=adapter_name,
+        reason_code="adapter.configuration_invalid",
+    )
+
+
+def validated_endpoint(
+    value: object, *, provider: str, adapter_name: str, parameter: str = "endpoint"
+) -> str:
+    """Return a deliberately configured endpoint after structural checks.
+
+    The application may point an adapter at any host it chooses, including
+    a proxy or a local test server, so no host list is applied. What is
+    refused is a value that is not an absolute ``http`` or ``https`` URL
+    naming a host, or one that carries user information, a fragment, a
+    backslash, whitespace or a control character, or an unusable port.
+    ``http`` is accepted because local and proxied deployments use it; the
+    credential then travels without transport encryption, which is the
+    application's decision to make.
+    """
+    problem = False
+    if not isinstance(value, str) or not value:
+        problem = True
+    elif "\\" in value or any(ord(char) <= 32 or ord(char) == 127 for char in value):
+        problem = True
+    else:
+        try:
+            parts = urlsplit(value)
+            port = parts.port
+        except ValueError:
+            problem = True
+        else:
+            del port
+            problem = (
+                parts.scheme not in {"http", "https"}
+                or not parts.hostname
+                or parts.username is not None
+                or parts.password is not None
+                or bool(parts.fragment)
+            )
+    if problem:
+        raise _configuration_error(
+            f"{adapter_name} {parameter} must be an absolute http(s) URL that "
+            "names a host, without credentials or a fragment.",
+            provider=provider,
+            adapter_name=adapter_name,
+            reason_code="adapter.invalid_base_url",
+        )
+    return value
+
+
 def response_json(response: Any, *, provider: str, adapter_name: str, operation: str) -> Any:
     """Decode JSON and reject provider success responses with invalid bodies."""
     try:
@@ -82,7 +194,7 @@ def checked_request(
     """Perform one request and normalize transport and HTTP failures."""
     client = require_requests(adapter_name=adapter_name, extra="voice-http")
     try:
-        response = client.request(method, url, timeout=timeout, **kwargs)
+        response = client.request(method, url, timeout=timeout, allow_redirects=False, **kwargs)
     except client.exceptions.RequestException as error:
         raise normalized_adapter_error(
             error,

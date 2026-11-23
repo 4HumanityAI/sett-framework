@@ -6,8 +6,6 @@
 
 ## Why SETT
 
-As a developer fascinated by machine learning, I studied and observed that AI was focused on corporate benefits rather than on humans as individuals. This led me to think and propose, during the 2020 COVID-19 quarantine from my humble home in Argentina, a solution to address their needs and prevent older adults from falling behind technologically: people whom I saw neglected not only on a personal level but also by their surroundings and institutions. After validating my approach with the ideas of organizations like GoodAI, I came to the firm conviction that AI should be a tool at the service of humanity and not just a mass-market product.
-
 Most AI systems based on language models treat the model as the system itself. The large language model (LLM) receives a request, returns a response, and that is where the architecture ends. This works for simple tasks, but even today it falls short when multiple specialized capabilities need to work together: or when resource consumption makes that coordination impractical for most users. What is missing is ethical governance over every action and a clear separation between what each component knows and what it shares.
 
 SETT was designed to answer a different question: not "How do you use an LLM?" but "How do you create a system in which several specialized modules operate in a coordinated and autonomous manner, yet toward a common goal, each with its own memory, each governed by an ethical layer, and each replaceable without affecting the rest?"
@@ -28,9 +26,9 @@ This makes the system predictable and auditable. You know exactly what each expe
 
 ### 2. Independent memory per agent
 
-Each agent has its own private memory, inaccessible to the orchestrator and to other agents. Experts within an agent write their intermediate results there. The agent uses that private workspace to reason, and only publishes its final conclusion outward. This prevents inter-agent bias and keeps each domain's reasoning isolated.
+Each agent has its own private memory. Experts within an agent write their intermediate results there. The agent uses that private workspace to reason, and only publishes its final conclusion outward. This is meant to keep each domain's reasoning separate and to prevent agents from biasing each other. The separation is a design convention: SETT does not stop arbitrary Python code from reaching the underlying objects.
 
-The orchestrator never sees how an agent reached its conclusion: only what it concluded. This mirrors how a team of specialists works: you hear the doctor's diagnosis, not every step of their reasoning.
+The orchestrator sees what an agent concluded, not how it got there. This mirrors how a team of specialists works: you hear the doctor's diagnosis, not every step of their reasoning. Applications must keep that boundary; SETT does not enforce it as a sandbox.
 
 ### 3. Communication by events
 
@@ -64,9 +62,9 @@ SETT uses two distinct memory layers, and the separation is intentional.
 
 **UniversalMemory** is shared. All agents can publish to it, and the orchestrator can read everything from it. But agents only publish final, synthesized results: not their internal process. The universal memory is the system's source of truth, not a shared workspace.
 
-The practical consequence: the orchestrator always has a complete picture of what each agent concluded, but never knows how it got there. This is both a privacy guarantee and a design constraint that keeps agents properly isolated.
+The practical consequence: the orchestrator has a complete picture of what each agent published, but not of how it got there. This is a design constraint that keeps agents properly separated, not a runtime privacy guarantee.
 
-The orchestrator cannot modify universal memory directly, but it can audit it and request a review from any agent. If an agent publishes an incorrect result and no alert is triggered, the orchestrator can ask that same agent, or another agent, to re-evaluate. This makes the system self-correcting without bypassing the privacy boundary.
+Publication to universal memory goes through the governed update path. An application can audit universal memory and ask the same agent, or another one, to re-evaluate a result. SETT provides the pieces for that, not an automatic review workflow: self-correction is something the application builds.
 
 ---
 
@@ -100,15 +98,15 @@ Every action receives a harm score from `ContextAnalyzer`. The default analyzer 
 
 ### Layer 2: User risk profile (RiskProfile)
 
-The RiskProfile captures the user's state at a given moment through three pillars: emotional instability (0.0–1.0), influence vulnerability (0.0–1.0), and collateral damage potential (0.0–1.0). This layer asks: who is this person right now, and how does their current state affect how we should evaluate actions?
+The RiskProfile captures the user's state at a given moment through three pillars: emotional instability (0.0 to 1.0), influence vulnerability (0.0 to 1.0), and collateral damage potential (0.0 to 1.0). This layer asks: who is this person right now, and how does their current state affect how we should evaluate actions?
 
 The RiskProfile lives exclusively in PrivateMemory. It is never published to universal memory. It influences decisions without ever becoming shared data. This is the key component that ensures the system responds appropriately to what is known in computer science as the Layer 8 problem: the human factor that no algorithm can fully predict, due to the very nature of human beings.
 
-### Layer 3: Environmental context (RiskLevel 0–5)
+### Layer 3: Environmental context (RiskLevel 0 to 5)
 
 The EnvironmentalContext describes the state of the space the user is in, not the user themselves. It is the only risk data that can be shared between SETT instances. When one instance detects a critical situation and publishes RiskLevel 4 for a location, other instances in the same location read it and their filters tighten automatically. It is designed to carry the level and the location, not the person: "the environment has this level", never "this person has this profile".
 
-> **Privacy design, not a runtime guarantee (F11, defensive audit #2):** EnvironmentalContext is shaped so that a caller following its intent shares only the RiskLevel, the location, and the source domain. However, `location_id`, `source_domain`, and `message` are plain, unvalidated strings, so nothing in the class itself stops a caller from putting a personal identifier or biometric value into them. Keeping personal data out of an EnvironmentalContext is the responsibility of the code that constructs it.
+> **Privacy design, not a runtime guarantee:** EnvironmentalContext is shaped so that a caller following its intent shares only the RiskLevel, the location, and the source domain. However, `location_id`, `source_domain`, and `message` are plain, unvalidated strings, so nothing in the class itself stops a caller from putting a personal identifier or biometric value into them. Keeping personal data out of an EnvironmentalContext is the responsibility of the code that constructs it.
 
 ---
 
@@ -116,7 +114,7 @@ The EnvironmentalContext describes the state of the space the user is in, not th
 
 The EthicalFilter is not a prompt. It is an architectural layer that intercepts every action submitted through `SETTExecutor` (via `submit_action()`/`submit()`/`submit_controlled()`) and every write to universal memory before it is executed. This distinction matters: a system that relies on a prompt to be ethical can have that prompt bypassed or ignored. A system with a governance layer at the infrastructure level, sitting on the one path that actually performs the side effect, cannot.
 
-Every action and every decision that goes through that path is either accepted or rejected before it reaches the user or the outside world. This is a structural guarantee for that path specifically, not a claim that SETT intercepts arbitrary Python (F19, defensive audit #2): `propose_action()` and any side effect performed directly in application code, outside `SETTExecutor`, are opt-in and remain the calling application's responsibility; SETT cannot govern an effect it is never asked to run. Ethics matter more than the system's capabilities. A framework that cannot say no, for the actions it does execute, is not trustworthy.
+Every action and every decision that goes through that path is either accepted or rejected before it reaches the user or the outside world. This is a structural guarantee for that path specifically, not a claim that SETT intercepts arbitrary Python: `propose_action()` and any side effect performed directly in application code, outside `SETTExecutor`, are opt-in and remain the calling application's responsibility; SETT cannot govern an effect it is never asked to run. Ethics matter more than the system's capabilities. A framework that cannot say no, for the actions it does execute, is not trustworthy.
 
 The filter evaluates every action using the three-layer risk system and returns one of three verdicts:
 
@@ -151,3 +149,6 @@ From *Beatless*, we drew inspiration from the concept of multiple nodes (HIE) op
 
 **Published preprints:**
 [English](https://doi.org/10.5281/zenodo.21287133) · [Español](https://doi.org/10.5281/zenodo.21287355) · [日本語](https://doi.org/10.5281/zenodo.21301700)
+
+
+*Documentation correction: privacy and review descriptions now distinguish architectural conventions from runtime enforcement. No code behavior changes are included.*

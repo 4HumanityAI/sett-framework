@@ -56,8 +56,8 @@ def _normalized_sqlite_failures(
     ``SQLitePersistenceBackend`` is the reference implementation of the
     persistence contract, so an application that catches
     ``SETTPersistenceError`` must not silently miss a failure that the
-    official backend itself produced (M-01, defensive and infrastructure
-    audit of v0.14.0: opening an unwritable path escaped as a bare
+    official backend itself produced (the v0.14.0 audit found that
+    opening an unwritable path escaped as a bare
     ``sqlite3.OperationalError``). Catching only ``sqlite3.Error`` keeps
     this a translation, never a catch-all: ``SETTIdempotencyConflictError``,
     ``SETTPersistenceContinuityError``, ``SETTPersistencePositionError``,
@@ -565,7 +565,7 @@ class SQLitePersistenceBackend(PersistenceBackend):
     the files it writes, and it does not encrypt them. Persisted evidence,
     stage outputs, ``PrivateMemory`` state, and authorization evidence can
     carry application data; protecting them is the deploying application's
-    responsibility (M-02, defensive and infrastructure audit of v0.14.0).
+    responsibility.
 
     Protect the containing directory, not the files. Opening the database
     can create ``-wal`` and ``-shm`` sidecars, a clean ``close()`` removes

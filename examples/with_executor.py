@@ -5,7 +5,7 @@ Demonstrates the "actions as data" pattern using SETTExecutor: the
 structural alternative to SETTAgent.propose_action().
 
 The core idea: an expert never calls the real client (an SMS provider,
-an emergency-services API, a payment gateway) directly. It only
+a task service, a payment gateway) directly. It only
 describes what it wants to happen as an Action. The SETTExecutor is
 the ONLY component that can turn that description into a real effect,
 and only after the EthicalFilter approves it.
@@ -34,21 +34,21 @@ from sett import (
 )
 
 # ── SIMULATED EXTERNAL CLIENTS ───────────────────────────────────────────────
-# In a real system these would be a Twilio client, a hospital's emergency
+# In a real system these would be a messaging client, a task service
 # API, a payments SDK, etc. They are defined here, OUTSIDE any expert or
 # agent, and only ever called from inside a handler registered with the
 # Executor: never from expert/agent code directly.
 
-def real_sms_client(payload: dict) -> dict:
+def simulated_message_client(payload: dict) -> dict:
     print(f"    📱 [SMS PROVIDER] Sending to {payload.get('to')}: "
           f"\"{payload.get('message')}\"")
     return {"delivered": True}
 
 
-def real_emergency_services_client(payload: dict) -> dict:
-    print(f"    🚑 [EMERGENCY SERVICES] Dispatching to location: "
-          f"{payload.get('location', 'unknown')}")
-    return {"dispatched": True, "eta_minutes": 8}
+def simulated_task_client(payload: dict) -> dict:
+    print(f"    [TASK SERVICE] Submitting to queue: "
+          f"{payload.get('queue', 'unknown')}")
+    return {"submitted": True}
 
 
 # ── AN AGENT THAT NEVER TOUCHES THE REAL CLIENTS ─────────────────────────────
@@ -88,16 +88,15 @@ class NotificationAgent(SETTAgent):
         return result
 
 
-class EmergencyAgent(SETTAgent):
+class TaskAgent(SETTAgent):
     """
-    A higher-stakes example: this agent can request that emergency
-    services be dispatched, but, just like NotificationAgent, it has
-    no code path that reaches a real emergency API except through the
-    Executor, gated by the EthicalFilter.
+    This agent requests a task submission through its configured Executor.
+    The simulated service is called only by the registered handler after
+    the EthicalFilter accepts the action. No external service is contacted.
     """
 
     def __init__(self):
-        super().__init__(name="EmergencyAgent", domain="emergency")
+        super().__init__(name="TaskAgent", domain="tasks")
 
     def process(self, input_data):
         risk_profile = RiskProfile(
@@ -106,11 +105,11 @@ class EmergencyAgent(SETTAgent):
             collateral_damage_potential=0.0,
         )
         result = self.submit_action(
-            "call_emergency_services",
-            payload={"location": input_data.get("location", "unknown")},
+            "submit_task",
+            payload={"queue": input_data.get("queue", "unknown")},
             risk_profile=risk_profile,
         )
-        self._publish_to_universal({"emergency_requested": True})
+        self._publish_to_universal({"task_requested": True})
         return result
 
 
@@ -127,41 +126,41 @@ if __name__ == "__main__":
     print("\n[SCENARIO 1] Routine SMS reminder: expected: sent")
 
     executor = SETTExecutor()
-    executor.register_handler("send_sms", real_sms_client)
-    executor.register_handler("call_emergency_services", real_emergency_services_client)
+    executor.register_handler("send_sms", simulated_message_client)
+    executor.register_handler("submit_task", simulated_task_client)
 
     orchestrator = SETTOrchestrator(ethical_filter=EthicalFilter())
     orchestrator.register_executor(executor)   # order-independent: agents
     orchestrator.register_agent(NotificationAgent())  # can be registered
-    orchestrator.register_agent(EmergencyAgent())     # before or after this
+    orchestrator.register_agent(TaskAgent())     # before or after this
 
     result = orchestrator.process(
-        input_data={"phone": "+54 9 11 1234 5678", "reminder": "take your medication"},
+        input_data={"phone": "example-recipient", "reminder": "review the report"},
         domain="notifications",
         emotional_state="calm",
     )
     print(f"  ✓ Handler executed, result: {result}")
 
-    # ── Scenario 2: emergency dispatch: approved, handler runs ─────────────
+    # ── Scenario 2: task submission: approved, handler runs ─────────────
 
-    print("\n[SCENARIO 2] Emergency dispatch requested: expected: dispatched")
+    print("\n[SCENARIO 2] Task submission requested: expected: submitted")
 
     result = orchestrator.process(
-        input_data={"location": "Av. Corrientes 1234", "instability": 0.6},
-        domain="emergency",
+        input_data={"queue": "example-queue", "instability": 0.6},
+        domain="tasks",
         emotional_state="distressed",
     )
     print(f"  ✓ Handler executed, result: {result}")
 
     # ── Scenario 3: blocked BEFORE the handler ever runs ────────────────────
     # A strict ruleset + crisis state pushes the score past reject_threshold.
-    # real_sms_client() is NEVER called: no SMS is actually sent.
+    # simulated_message_client() is NEVER called: no SMS is actually sent.
 
     print("\n[SCENARIO 3] SMS attempted during crisis, strict ruleset: expected: BLOCKED")
 
     strict_ruleset = EthicalRuleset(name="strict", reject_threshold=3.0, warn_threshold=1.5)
     strict_executor = SETTExecutor()
-    strict_executor.register_handler("send_sms", real_sms_client)
+    strict_executor.register_handler("send_sms", simulated_message_client)
 
     strict_orchestrator = SETTOrchestrator(ethical_filter=EthicalFilter(ruleset=strict_ruleset))
     strict_orchestrator.register_executor(strict_executor)
@@ -169,7 +168,7 @@ if __name__ == "__main__":
 
     try:
         strict_orchestrator.process(
-            input_data={"phone": "+54 9 11 0000 0000", "reminder": "urgent"},
+            input_data={"phone": "example-recipient", "reminder": "urgent"},
             domain="notifications",
             emotional_state="crisis",
         )
@@ -189,7 +188,7 @@ if __name__ == "__main__":
 
     try:
         bare_orchestrator.process(
-            input_data={"phone": "+54 9 11 0000 0000", "reminder": "test"},
+            input_data={"phone": "example-recipient", "reminder": "test"},
             domain="notifications",
         )
         print("  Handler ran (unexpected)")
@@ -207,8 +206,8 @@ if __name__ == "__main__":
 
     print(f"\n{'═' * 55}")
     print("  Key takeaway:")
-    print("  NotificationAgent and EmergencyAgent never import an SMS or")
-    print("  emergency-services SDK. The only code that can call")
-    print("  real_sms_client() or real_emergency_services_client() is the")
+    print("  NotificationAgent and TaskAgent never import an SMS or")
+    print("  task-service SDK. The only code that can call")
+    print("  simulated_message_client() or simulated_task_client() is the")
     print("  Executor: and only after the EthicalFilter approves it.")
     print(f"{'═' * 55}\n")

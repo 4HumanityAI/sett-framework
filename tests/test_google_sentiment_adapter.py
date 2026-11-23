@@ -22,7 +22,7 @@ def _fake_google_cloud_sys_modules(submodule_name: str, submodule_mock: MagicMoc
     """Same construction as test_google_tts_stt_adapters.py: see that
     file for why the parent attribute must be set explicitly.
 
-    Also registers a fake google.oauth2.service_account (F18 fix): the
+    Also registers a fake google.oauth2.service_account: the
     adapter now loads credentials explicitly from a file via
     google.oauth2.service_account.Credentials.from_service_account_file()
     instead of mutating os.environ, so that import must resolve too.
@@ -184,7 +184,7 @@ class TestGoogleSentimentAdapterAnalyze:
     def test_credentials_path_argument_builds_explicit_credentials(
         self, monkeypatch
     ):
-        """F18 regression (defensive audit #2).
+        """Regression: credentials are loaded without touching os.environ.
 
         credentials_path used to be applied by mutating the process-wide
         os.environ["GOOGLE_APPLICATION_CREDENTIALS"], global state that
@@ -223,7 +223,7 @@ class TestGoogleSentimentAdapterAnalyze:
             adapter = GoogleSentimentAdapter()
             with pytest.raises(SETTServiceAdapterError) as exc_info:
                 adapter.analyze("hola")
-            # L-01: the provider's own text is reachable through the
+            # The provider's own text is reachable through the
             # chained cause, never through the public message.
             assert "quota exceeded" not in str(exc_info.value)
             assert "google_cloud_sentiment analyze failed" in str(exc_info.value)

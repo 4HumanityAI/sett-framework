@@ -253,7 +253,7 @@ def test_an_explicit_timeout_overrides_the_policy():
 
 
 def test_the_lifecycle_policy_supplies_a_per_agent_timeout():
-    """H-01 regression: agent_timeouts must actually stop a slow agent.
+    """Regression: agent_timeouts must actually stop a slow agent.
 
     Before this fix, ``LifecyclePolicy.agent_timeout()`` was resolvable
     but never consulted anywhere in the real execution path: an agent
@@ -393,7 +393,7 @@ def test_a_stage_timeout_stops_only_that_stage():
 
 
 def test_a_pipeline_stage_agent_is_bound_by_its_own_policy_timeout():
-    """H-01 regression, inside a pipeline: the agent inside a stage must
+    """Regression, inside a pipeline: the agent inside a stage must
     still respect its own per-domain timeout even when the stage itself
     was given no ``timeout_seconds`` of its own.
     """

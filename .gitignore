@@ -40,5 +40,5 @@ htmlcov/
 Thumbs.db
 
 # Generated governance cards (regenerate with examples/governance_card.py)
-examples/governance_card.json
-examples/governance_card.html
+governance_card.json
+governance_card.html

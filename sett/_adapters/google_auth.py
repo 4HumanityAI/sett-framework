@@ -1,7 +1,6 @@
 """
 SETT Framework: Google Cloud credential loading, shared across adapters
 ==============================
-F18 fix (defensive audit #2).
 
 ``GoogleTTSAdapter``, ``GoogleSTTAdapter`` and ``GoogleSentimentAdapter``
 each accepted an optional ``credentials_path`` and, when given, used to
@@ -69,8 +68,7 @@ def google_credentials_from_path(credentials_path: str | None) -> Any | None:
         )
     except Exception as error:
         raise SETTServiceAdapterError(
-            f"Could not load Google Cloud credentials from "
-            f"{credentials_path!r}: {error}"
+            "Could not load Google Cloud credentials from the configured file."
         ) from error
 
 
@@ -96,9 +94,8 @@ def build_google_client(
     Asking the client library is the only correct way to answer "are there
     credentials", because it is the thing that resolves them. It already
     fails closed with ``DefaultCredentialsError`` when there are none, and
-    its message names every source it looked at, which is more useful than
-    anything this module could reconstruct. All that is added here is the
-    framework's own exception type on the way out.
+    SETT preserves that exception as the cause for explicit diagnostic
+    inspection. Public messages contain no credential paths or library text.
 
     Everything this raises is a ``SETTServiceAdapterError``: a missing
     credential gets the message above, and any other construction failure
@@ -113,22 +110,15 @@ def build_google_client(
     except Exception as error:
         if type(error).__name__ == "DefaultCredentialsError":
             raise SETTServiceAdapterError(
-                f"Google Cloud credentials not found for {adapter_name}. "
+                "Google Cloud credentials not found. "
                 "Pass credentials_path= with a service account JSON key, or "
                 "configure Application Default Credentials (gcloud auth "
                 "application-default login, GOOGLE_APPLICATION_CREDENTIALS, "
-                "or the workload identity of the machine this runs on). The "
-                f"client library reported: {error}"
+                "or the workload identity of the machine this runs on)."
             ) from error
-        # Missing credentials is the failure worth its own message; every
-        # other way a client constructor can fail still leaves as a
-        # framework error rather than as whatever type the Google library
-        # happened to choose. An earlier version re-raised those
-        # untranslated, which meant "build a Google client" had one
-        # documented failure type and an open-ended set of undocumented
-        # ones, following the same enumerate-the-known-failures shape that
-        # ``OllamaAdapter._post`` already had to abandon.
+        # Missing credentials retain their specific diagnostic. Other client
+        # construction failures are translated into the framework error family
+        # so callers do not need the Google SDK's exception hierarchy.
         raise SETTServiceAdapterError(
-            f"Could not construct the Google client for {adapter_name}: "
-            f"{type(error).__name__}: {error}"
+            "Could not construct the Google client."
         ) from error

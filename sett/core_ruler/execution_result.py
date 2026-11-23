@@ -125,13 +125,8 @@ class ExecutionState:
         if self.attempt_count < 1:
             raise SETTValidationError("attempt_count must be at least 1.")
         if self.duration_seconds is not None:
-            # The last numeric field of this dataclass to get a guard, and
-            # the reason it needed one: every sibling above validates, so
-            # a NaN or a negative duration was the one nonsensical value
-            # this type would accept and then carry into a report as if it
-            # were measured. It cannot arise from the framework itself because
-            # it comes from the monotonic clock. However, ExecutionState is a
-            # public dataclass an application may build directly.
+            # Applications can construct ExecutionState directly, so durations
+            # need validation even when framework measurements use a monotonic clock.
             object.__setattr__(
                 self,
                 "duration_seconds",

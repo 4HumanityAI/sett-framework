@@ -117,7 +117,7 @@ class TestExecutionContext:
         ],
     )
     def test_unsafe_metadata_aliases_are_also_rejected(self, metadata):
-        """F16/F17 regression (defensive audit #2): ExecutionContext
+        """Regression: ExecutionContext
         metadata and trace attributes now share one sensitive-key
         definition (SENSITIVE_KEY_FRAGMENTS in this module), so an alias
         caught on the trace side is caught here too.
@@ -740,7 +740,7 @@ class TestTraceRecorderHardening:
         ],
     )
     def test_sensitive_key_aliases_are_also_rejected(self, key):
-        """F16 regression (defensive audit #2).
+        """Regression: spelling variants of sensitive keys are rejected.
 
         A plain substring check against the lowercased key missed common
         spelling variants of a sensitive field name whenever the

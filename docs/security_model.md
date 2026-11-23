@@ -15,6 +15,12 @@ non-string mapping keys, and unsupported objects. It is bounded by key count,
 depth, and serialized size. Optional subject/session identifiers are opaque;
 applications should use pseudonymous values.
 
+Sensitive-key matching folds Unicode compatibility forms, case and accents
+before checking known fragments. It is a heuristic over key names, not a
+content scanner or a general cross-script homoglyph detector. A plausible
+key name can still carry private data in its value; applications remain
+responsible for admitting only appropriate metadata.
+
 `export_trace()` returns defensive sanitized dictionaries. Exporter callbacks
 receive the same defensive representation. Exporters are best-effort for
 diagnostic events, but a failure while exporting the pre-effect
@@ -22,13 +28,23 @@ diagnostic events, but a failure while exporting the pre-effect
 `handler.started` therefore means `handler.authorized` was committed and
 exported successfully. When Authorization Ruler is configured, the additional
 `authorization.receipt_verified` event causally precedes
-`handler.authorized`. SETT does not permit an effect it cannot trace at that
-configured boundary.
+`handler.authorized`, and a final gate after that event's exporters checks
+that the consumed grant did not go stale meanwhile; if it did,
+`handler.blocked` is recorded instead of `handler.started`. SETT does not permit an effect it cannot trace at that
+configured boundary. A start event opens the dispatch span. Once its exporters
+return and the payload is copied, SETT checks authority again immediately
+before calling the handler. A late rejection closes that start with
+`handler.entry_blocked`. The receipt stays consumed and the handler never runs.
 
 Direct `TraceRecorder.record()` calls apply the same recursive constraints:
 attributes are deeply frozen, limited to 32 keys, depth 8, and 16 KiB,
 non-finite numbers and sensitive key fragments are rejected, and unsupported
 objects are never converted with `repr()`.
+
+Without an `EvidenceStream`, event names and reason codes retain their
+existing unbounded vocabulary. Large values can consume memory; the recorder
+does not enforce a total memory quota. With a stream configured, vocabulary
+and frame limits apply even when that stream stores evidence in RAM.
 
 The recorder's hash chain is tamper-evident, not signed. External append-only
 storage, signatures, access control, retention, and deletion policy remain
@@ -102,16 +118,10 @@ harmful” and not necessarily “no domain analyzer exists”.
 
 Universal-memory reads, history, ethical audit entries, and Executor logs return
 deep copies. Mutating a returned object cannot rewrite internal state.
-`PrivateMemory.read()` and `PrivateMemory.get_all()` return deep copies as well,
-since v0.9.0 (a downstream integrator mutating a nested value read from an
-agent's own workspace could otherwise corrupt stored data without ever calling
-`write()`, with no trace in `get_history()`, the same failure mode the
-Universal Memory guarantee above already closed). This paragraph previously
-claimed `PrivateMemory` "intentionally retains normal Python object identity" -
-that was accurate before v0.9.0, but the hardening pass changed it; the text
-was never updated to match. Applications should still prefer storing immutable
-values where practical, but should not rely on mutating a value read from
-`PrivateMemory` to have any effect on stored state.
+`PrivateMemory.read()` and `PrivateMemory.get_all()` return deep copies as well.
+Mutating a returned nested value does not modify stored state or create a
+history entry. Applications should prefer immutable values where practical
+and use `write()` to change stored state.
 
 ## Tamper-evident logs
 
@@ -125,6 +135,10 @@ An open boundary after an interrupted process also makes unified `verify()`
 return `False`; this does not by itself establish corruption. Durable recovery
 separates `RecoveryReport.chain_integrity` from per-trace completeness so an
 operator can distinguish intact but interrupted evidence from altered evidence.
+Termination signals such as `KeyboardInterrupt` and `SystemExit` propagate.
+If a pre-effect exporter raises one, the handler does not run and a trace
+boundary can remain open. SETT does not fabricate a terminal event or treat
+that interruption as evidence of a completed effect.
 
 Durable terminal events also fail closed without sacrificing lifecycle closure.
 If terminal metadata exceeds the durable contract, SETT records the same
@@ -141,7 +155,7 @@ component history and audit-log views remain in-memory surfaces.
 Persistence does **not** provide authenticity against an attacker who can
 replace the complete chain and its storage, and it is not a digital signature.
 Deployments that need that protection must additionally sign the chain or
-anchor it in an external trusted system. SETT v0.14.0 provides neither the
+anchor it in an external trusted system. SETT provides neither the
 signature nor the external anchoring.
 
 ## Filesystem protection of durable persistence
@@ -202,7 +216,7 @@ into the same database as everything else, with no isolation, no separate
 permissions, and no encryption. Nothing in the name should be read as a
 storage guarantee.
 
-SETT v0.14.0 deliberately implements no best-effort hardening of its own. A
+SETT deliberately implements no best-effort hardening of its own. A
 `chmod` applied to the database at open time would leave the sidecars
 untouched, would not survive their recreation, and would not be an ACL policy
 on Windows: it would read as protection while providing close to none. The
@@ -216,3 +230,41 @@ the directory level.
 - SETT supplies mechanisms, not validated medical, legal, or emergency policy.
 - Domain applications must provide analyzers, consent, regional procedures,
   verified contacts, and provider-specific reliability controls.
+
+## Adapter credentials and diagnostic output
+
+The application owns credential storage, access permissions, rotation and
+revocation. SETT does not provide a secret vault or automatically inspect prompts,
+conversation history or memory for secrets. Keep authentication credentials out
+of content sent to models. Environment variables are a configuration mechanism,
+not encryption or isolation from other code in the process.
+
+Adapter errors retain the provider exception as `__cause__` for diagnostics.
+That exception can contain secrets or request data. Full tracebacks, including
+those produced by `logger.exception()` or `exc_info=True`, must be treated as
+potentially sensitive. The normalized message and `safe_view()` omit raw
+provider exception text; this is not a universal redaction guarantee for
+application-supplied data or independently configured SDK logging.
+
+For exported adapter-failure records, catch the error and log its structured
+view without attaching exception information:
+
+```python
+import logging
+from sett.exceptions import SETTAdapterError
+
+logger = logging.getLogger(__name__)
+
+def complete_with_safe_failure_logging(llm, prompt):
+    try:
+        return llm.complete(prompt)
+    except SETTAdapterError as error:
+        logger.warning("Adapter operation failed: %s", error.safe_view(), exc_info=False)
+        return None
+```
+
+Here `None` signals failure to the caller; it is not a successful answer or
+authorization. Configure other exception handlers and log exporters separately.
+See [adapter failures](adapters.md#failures-resilience-and-health) for the
+unchanged diagnostic contract and [LLM configuration](adapters.md#llm-request-parameters-and-credentials)
+for credential precedence and request parameters.

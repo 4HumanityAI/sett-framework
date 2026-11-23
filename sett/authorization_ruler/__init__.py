@@ -1,11 +1,16 @@
 """Public contracts and deterministic mechanism for SETT authorization."""
 
+from sett.authorization_ruler.authorizer import (
+    AuthorizationRuler,
+    SystemAuthorizationClock,
+)
 from sett.authorization_ruler.contracts import (
     ApprovalVerifier,
     AuthorizationClock,
     AuthorizationFingerprintPolicy,
     AuthorizationPolicy,
     AuthorizationRequestResolver,
+    PolicySelectionResolver,
 )
 from sett.authorization_ruler.errors import (
     SETTAuthorizationConfigurationError,
@@ -28,11 +33,16 @@ from sett.authorization_ruler.models import (
     ExecutionMode,
     FieldTrust,
     FieldValue,
+    PolicyApplicability,
+    PolicyApplicabilityState,
+    PolicyBinding,
     PolicyDecision,
+    PolicyOrigin,
+    PolicySelection,
+    PolicySourceReference,
     ReceiptUse,
     VerifiedApproval,
 )
-from sett.authorization_ruler.ruler import AuthorizationRuler, SystemAuthorizationClock
 from sett.authorization_ruler.store import (
     AuthorizationReceiptStore,
     InMemoryAuthorizationReceiptStore,
@@ -67,7 +77,14 @@ __all__ = [
     "FieldValue",
     "InMemoryAuthorizationEvidence",
     "InMemoryAuthorizationReceiptStore",
+    "PolicyApplicability",
+    "PolicyApplicabilityState",
+    "PolicyBinding",
     "PolicyDecision",
+    "PolicyOrigin",
+    "PolicySelection",
+    "PolicySelectionResolver",
+    "PolicySourceReference",
     "ReceiptUse",
     "SETTAuthorizationConfigurationError",
     "SETTAuthorizationError",

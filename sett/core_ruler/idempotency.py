@@ -112,7 +112,7 @@ class ActionAttempt:
     counts attempts against the key, not against one call to
     ``submit_controlled()``, so it keeps climbing across a caller
     resubmitting the same key after a retryable failure instead of
-    resetting to 1 (M-02, defensive audit #3).
+    resetting to 1.
     """
 
     attempt_id: str
@@ -165,7 +165,7 @@ def action_fingerprint(action: Any) -> str:
 
     Raises:
         SETTValidationError: If the payload contains a value ``json.dumps``
-            cannot serialize. M-05 (severe audit): this used to fall back
+            cannot serialize. This used to fall back
             to ``default=repr``, which is unstable in both directions: an
             object's default ``repr()`` embeds its memory address, so the
             *same* logical payload fingerprints differently every attempt

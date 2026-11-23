@@ -35,16 +35,9 @@ if TYPE_CHECKING:
     from sett.risk_ruler.environmental_context import EnvironmentalContext
     from sett.risk_ruler.risk_profile import RiskProfile
 
-# Reserved key prefix for environmental context entries.
-#
-# One store holds two kinds of entry: agent results under their domain
-# and environmental contexts under this prefix. Telling them apart
-# is what read_all() and read_environmental_context() rely on. A domain
-# that happens to start with the prefix therefore lands in the store as
-# an agent result and is read back as an environmental context: it
-# disappears from read_all() and makes read_environmental_context()
-# search for fields a normal result does not have. The prefix is
-# reserved below rather than merely undocumented.
+# Agent results and environmental contexts share one store. Reserve this
+# prefix so read_all() and read_environmental_context() can distinguish
+# their entries without misclassifying an agent domain.
 ENV_CONTEXT_PREFIX = "__env_ctx__"
 
 # Retained as an alias: existing call sites in this module use this name.
@@ -192,18 +185,9 @@ class UniversalMemory:
         The publishing agent's domain is still available, namespaced as
         "_source_agent" to avoid colliding with the agent's own data.
         """
-        # One read of the caller's object, at the door. Everything below,
-        # including the leak check, the filter's context and the stored
-        # value, is derived from this single copy and never from `result` again.
-        #
-        # Reading it twice (once to evaluate, once to store) left a window
-        # in which another thread holding the same dict could change it in
-        # between, so the filter approved one value and a different one was
-        # stored. That is not a caller discipline problem: SETT's guarantee
-        # is that what policy approved is what happens, and a guarantee
-        # that depends on nobody touching an object they still hold is not
-        # structural. Copying once closes the window without a lock,
-        # because there is no longer a second read to race against.
+        # Derive the leak check, filter context and stored value from one snapshot.
+        # A later mutation of the caller's result must not change what is stored
+        # after policy evaluation.
         _reject_reserved_agent_name(agent)
         published = deepcopy(result)
         _reject_risk_profile_leak(published, agent=agent)

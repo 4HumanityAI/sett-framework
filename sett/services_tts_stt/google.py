@@ -7,11 +7,9 @@ Text-to-speech and speech-to-text adapters backed by Google Cloud
 Implements TTSBase and STTBase: fully interchangeable with any other
 provider's adapters (e.g. ElevenLabsTTSAdapter for synthesis).
 
-Ported from an early recovered prototype
-(Speaker/Listener classes, Nov. 2024): same underlying Google Cloud
-calls, reshaped to the stateless adapter contract: no UI coupling, no
-playback, no listening loop. Those concerns stayed in the recovered
-code as reference; they were intentionally not carried over here.
+The adapters follow the stateless adapter contract: no UI coupling, no
+playback and no listening loop; those concerns belong to the
+application.
 
 Requires, from a source checkout: pip install -e ".[google-tts-stt]"
 """
@@ -19,6 +17,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from sett._adapters.google_auth import (
+    build_google_client,
+    google_credentials_from_path,
+)
 from sett.core_ruler.adapter import (
     AdapterCapabilities,
     AdapterErrorKind,
@@ -34,10 +36,6 @@ from sett.exceptions import (
     SETTCancelledError,
     SETTServiceAdapterError,
     SETTTimeoutError,
-)
-from sett.services_google_auth import (
-    build_google_client,
-    google_credentials_from_path,
 )
 from sett.services_tts_stt.base import STTBase, TTSBase
 
@@ -167,8 +165,7 @@ class GoogleSTTAdapter(STTBase):
 
     Expects LINEAR16-encoded audio (standard WAV PCM): the same
     encoding `speech_recognition.Microphone` produces via
-    `audio.get_wav_data()`, which is what the recovered Listener class
-    fed it.
+    `audio.get_wav_data()`.
 
     Usage:
         from sett.services_tts_stt.google import GoogleSTTAdapter

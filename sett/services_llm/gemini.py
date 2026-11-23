@@ -1,7 +1,8 @@
 """
 SETT Framework: Google Gemini Adapter
 ==============================
-LLM adapter for Google's Gemini models.
+LLM adapter for Google's Gemini models, built on the Google Gen AI SDK
+(the ``google-genai`` package, imported as ``from google import genai``).
 
 Implements the LLMBase interface: fully interchangeable with
 AnthropicAdapter or OpenAIAdapter.
@@ -21,6 +22,7 @@ from sett.core_ruler.adapter import (
     ConnectivityRequirement,
     adapter_call_scope,
     normalized_adapter_error,
+    required_model,
 )
 from sett.core_ruler.lifecycle import (
     pop_lifecycle_kwargs,
@@ -35,6 +37,18 @@ from sett.exceptions import (
 from sett.services_llm.base import LLMBase
 
 
+def _status_code(error: BaseException) -> int | None:
+    """The HTTP status the SDK attached to ``error``, if it is a number.
+
+    The SDK's API errors carry it as ``code``; ``status`` on the same
+    object is a text label, which the shared reader rightly ignores.
+    """
+    code = getattr(error, "code", None)
+    if isinstance(code, int) and not isinstance(code, bool):
+        return code
+    return None
+
+
 class GeminiAdapter(LLMBase):
     """
     LLM adapter for Google's Gemini models.
@@ -44,12 +58,14 @@ class GeminiAdapter(LLMBase):
 
         llm = GeminiAdapter(
             api_key="your-key",
-            model="gemini-1.5-flash"
+            model="<model identifier you chose>",
         )
         response = llm.complete("What is SETT?")
+
+    ``model`` is required. SETT ships no default model: the application
+    chooses one from the identifiers its provider account offers.
     """
 
-    DEFAULT_MODEL = "gemini-1.5-flash"
     DEFAULT_MAX_TOKENS = 1024
     DEFAULT_TEMPERATURE = 0.75
     DEFAULT_TIMEOUT_SECONDS = 60.0
@@ -57,15 +73,17 @@ class GeminiAdapter(LLMBase):
     def __init__(
         self,
         api_key: str | None = None,
-        model: str = DEFAULT_MODEL,
+        model: str | None = None,
         max_tokens: int = DEFAULT_MAX_TOKENS,
         temperature: float = DEFAULT_TEMPERATURE,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     ) -> None:
         """
         Args:
-            api_key: Google AI API key. Falls back to GOOGLE_API_KEY env var.
-            model: The Gemini model to use.
+            api_key: Google AI API key. Falls back to GOOGLE_API_KEY, then
+                GEMINI_API_KEY. A whitespace-only selected value is rejected.
+            model: The identifier of the model to use. Required; there
+                is no default.
             max_tokens: Maximum tokens in the response.
             temperature: Sampling temperature (0.0 to 1.0).
             timeout_seconds: This adapter's own default timeout, in effect
@@ -73,46 +91,48 @@ class GeminiAdapter(LLMBase):
                 ``lifecycle.AdapterLifecycle.effective_timeout``).
         """
         try:
-            import google.generativeai as genai
+            from google import genai
             self._genai = genai
         except ImportError:
             raise SETTLLMAdapterError(
-                "The 'google-generativeai' package is required to use GeminiAdapter. "
-                "SETT installs from source; from your checkout run: "
-                "pip install -e \".[gemini]\"",
+                "The 'google-genai' package is required to use GeminiAdapter. "
+                "From a source checkout run: pip install -e \".[gemini]\". "
+                "For an installed wheel, install its declared google-genai dependency.",
                 kind=AdapterErrorKind.CONFIGURATION,
                 provider="google_gemini",
                 adapter_name=type(self).__name__,
                 reason_code="adapter.dependency_missing",
             )
 
-        self._api_key = (api_key or os.getenv("GOOGLE_API_KEY", "")).strip()
+        self._api_key = (
+            api_key or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY", "")
+        ).strip()
         self._timeout_seconds = validate_duration_seconds(
             timeout_seconds, name="timeout_seconds"
         )
         if not self._api_key:
             raise SETTLLMAdapterError(
                 "Google API key not found. "
-                "Pass api_key= or set the GOOGLE_API_KEY environment variable.",
+                "Pass api_key= or set GOOGLE_API_KEY or GEMINI_API_KEY.",
                 kind=AdapterErrorKind.CONFIGURATION,
                 provider="google_gemini",
                 adapter_name=type(self).__name__,
                 reason_code="adapter.credentials_missing",
             )
 
-        self._model_name = model
+        self._model_name = required_model(
+            model,
+            error_type=SETTLLMAdapterError,
+            provider="google_gemini",
+            adapter_name=type(self).__name__,
+        )
         self._max_tokens = max_tokens
         self._temperature = min(1.0, max(0.0, temperature))
 
-        # Wrapped because whatever the SDK raises here is a failure of this
-        # adapter, and Convention #13 says a caller holding
-        # ``except SETTError`` should not have to also know the provider
-        # library's exception hierarchy to catch it.
+        # Translate SDK construction failures into the framework error family
+        # while preserving structured cancellation and timeout errors.
         try:
-            self._genai.configure(api_key=self._api_key)
-            self._model = self._genai.GenerativeModel(
-                model_name=self._model_name
-            )
+            self._client = self._genai.Client(api_key=self._api_key)
         except (SETTCancelledError, SETTTimeoutError, SETTAdapterError):
             raise
         except Exception as error:
@@ -145,24 +165,50 @@ class GeminiAdapter(LLMBase):
             metadata={"operations": ("complete", "chat")},
         )
 
-    def complete(self, prompt: str, system: str = "", **kwargs: Any) -> str:
-        """One-shot completion: no conversation history."""
-        with adapter_call_scope(self, "complete"):
+    def _request_config(
+        self,
+        system: str,
+        timeout_seconds: float | None,
+        kwargs: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Build the per-request configuration the SDK accepts as a dict.
+
+        The SDK takes its request timeout in milliseconds, as a whole
+        number, inside ``http_options``.
+        """
+        config: dict[str, Any] = {
+            "max_output_tokens": kwargs.get("max_tokens", self._max_tokens),
+            "temperature": kwargs.get("temperature", self._temperature),
+        }
+        if system:
+            config["system_instruction"] = system
+        if timeout_seconds is not None:
+            config["http_options"] = {
+                "timeout": max(1, int(timeout_seconds * 1000))
+            }
+        return config
+
+    def _generate(
+        self,
+        operation: str,
+        contents: Any,
+        system: str,
+        kwargs: dict[str, Any],
+    ) -> str:
+        """One request to the provider, with SETT's lifecycle and errors."""
+        with adapter_call_scope(self, operation):
             lifecycle = pop_lifecycle_kwargs(kwargs)
             lifecycle.throw_if_cancelled()
             response_received = False
             try:
-                full_prompt = f"{system}\n\n{prompt}".strip() if system else prompt
-                config = self._genai.GenerationConfig(
-                    max_output_tokens=kwargs.get("max_tokens", self._max_tokens),
-                    temperature=kwargs.get("temperature", self._temperature),
-                )
-                response = self._model.generate_content(
-                    full_prompt,
-                    generation_config=config,
-                    request_options={
-                        "timeout": lifecycle.effective_timeout(self._timeout_seconds)
-                    },
+                response = self._client.models.generate_content(
+                    model=self._model_name,
+                    contents=contents() if callable(contents) else contents,
+                    config=self._request_config(
+                        system,
+                        lifecycle.effective_timeout(self._timeout_seconds),
+                        kwargs,
+                    ),
                 )
                 response_received = True
                 lifecycle.throw_if_cancelled()
@@ -175,9 +221,14 @@ class GeminiAdapter(LLMBase):
                     error_type=SETTLLMAdapterError,
                     provider="google_gemini",
                     adapter_name=type(self).__name__,
-                    operation="complete",
+                    operation=operation,
                     kind=(AdapterErrorKind.INVALID_RESPONSE if response_received else None),
+                    status_code=_status_code(error),
                 ) from error
+
+    def complete(self, prompt: str, system: str = "", **kwargs: Any) -> str:
+        """One-shot completion: no conversation history."""
+        return self._generate("complete", prompt, system, kwargs)
 
     def chat(
         self,
@@ -189,53 +240,19 @@ class GeminiAdapter(LLMBase):
         Multi-turn conversation.
         Converts SETT's role format to Gemini's format.
         """
-        with adapter_call_scope(self, "chat"):
-            lifecycle = pop_lifecycle_kwargs(kwargs)
-            lifecycle.throw_if_cancelled()
-            response_received = False
-            try:
-                # Gemini uses "user" and "model" roles (not "assistant")
-                gemini_history = []
-                for msg in messages[:-1]:  # all but the last message
-                    role = "model" if msg["role"] == "assistant" else "user"
-                    gemini_history.append({
-                        "role": role,
-                        "parts": [msg["content"]],
-                    })
 
-                config = self._genai.GenerationConfig(
-                    max_output_tokens=kwargs.get("max_tokens", self._max_tokens),
-                    temperature=kwargs.get("temperature", self._temperature),
-                )
+        def contents() -> list[dict[str, Any]]:
+            # Gemini uses "user" and "model" roles (not "assistant"). The
+            # whole conversation travels in one stateless request.
+            return [
+                {
+                    "role": "model" if message["role"] == "assistant" else "user",
+                    "parts": [{"text": message["content"]}],
+                }
+                for message in messages
+            ]
 
-                chat_session = self._model.start_chat(history=gemini_history)
-
-                # Last message is the current user turn
-                last_msg = messages[-1]["content"] if messages else ""
-                if system:
-                    last_msg = f"{system}\n\n{last_msg}"
-
-                response = chat_session.send_message(
-                    last_msg,
-                    generation_config=config,
-                    request_options={
-                        "timeout": lifecycle.effective_timeout(self._timeout_seconds)
-                    },
-                )
-                response_received = True
-                lifecycle.throw_if_cancelled()
-                return response.text if response.text else ""
-            except (SETTCancelledError, SETTTimeoutError, SETTAdapterError):
-                raise
-            except Exception as error:
-                raise normalized_adapter_error(
-                    error,
-                    error_type=SETTLLMAdapterError,
-                    provider="google_gemini",
-                    adapter_name=type(self).__name__,
-                    operation="chat",
-                    kind=(AdapterErrorKind.INVALID_RESPONSE if response_received else None),
-                ) from error
+        return self._generate("chat", contents, system, kwargs)
 
     def __repr__(self) -> str:
         return f"GeminiAdapter(model={self._model_name!r})"

@@ -1,0 +1,137 @@
+{
+  "format": "sett.working_correspondence",
+  "format_version": 1,
+  "record_id": "eu-ai-act",
+  "revision": 1,
+  "instrument": {
+    "title": "Regulation (EU) 2024/1689 (Artificial Intelligence Act)",
+    "publisher": "Publications Office of the European Union (EUR-Lex)",
+    "edition": "Consolidated text of 27 July 2026, English",
+    "identifiers": [
+      "CELEX:02024R1689-20260727",
+      "ELI:reg/2024/1689/2026-07-27"
+    ],
+    "capture_sha256": "1ccd38d1c78482cf2053b70110115adcc5080700acc8bd7bead8cb3579143ccf",
+    "freshness": {
+      "state": "current",
+      "checked_on": "2026-10-18",
+      "note": "The consolidation is a documentary text, not the authentic legal act."
+    }
+  },
+  "requirements": [
+    {
+      "requirement_id": "article-2",
+      "revision": "1",
+      "locator": "Article 2; Article 113 is a separate applicability-date dependency",
+      "interpretation": "Keep the operator's applicability determination attributable, versioned and separate from the required-policy inventory; never derive jurisdiction from language or provider.",
+      "criterion": "A selected-policy record can retain its origin and revision; the later selection contract can represent applies, declared inapplicability and unresolved facts without deleting the candidate.",
+      "limits": "No inference that SETT or any deployment is in scope. The selected consolidation includes amended scope and applicability dates; Article 2(13), Article 113, role classification and other exceptions remain deployment-specific. Missing facts block an affected action only under an explicitly required application policy.",
+      "approved_sha256": "a8fe8e002ea411a6fb871d83556cc48eebd3adfe4839d6096c211a04c1fe20b0",
+      "capability": [
+        {
+          "mechanism": "The application declares, for each policy, whether it applies, does not apply or is undetermined, with a justification; the declaration is read before any policy runs.",
+          "reference": "docs/policy_selection.md",
+          "evidence": [
+            "tests/test_policy_selection.py::test_all_states_represent_declarations"
+          ]
+        },
+        {
+          "mechanism": "A required policy whose applicability is undetermined blocks the action.",
+          "reference": "docs/policy_ruler.md",
+          "evidence": [
+            "tests/test_policy_ruler.py::test_undetermined_required_applicability_blocks"
+          ]
+        }
+      ],
+      "applicability": "deployment_decides",
+      "configuration": "deployment_decides",
+      "institutional_outcome": "not_assessed_by_sett",
+      "left_to_deployment": [
+        "Determining whether the regulation applies to the deployment, and in which role.",
+        "Applying the dates of application set by Article 113.",
+        "Deciding whether an exception applies."
+      ]
+    },
+    {
+      "requirement_id": "article-14",
+      "revision": "1",
+      "locator": "Article 14(1)-(4)",
+      "interpretation": "Associate an application-defined oversight policy with its source and required review or checkpoint mechanisms. Do not infer a universal prior-approval rule from this provision.",
+      "criterion": "Retain the source and requirement revision now; later review/checkpoint batches must verify the application's declared obligation before the relevant controlled effect.",
+      "limits": "Metadata does not establish oversight effectiveness, operator competence or safe interruption. High-risk classification and phased application under Article 113 remain deployment-specific. This sample does not implement Article 14(5)'s special case.",
+      "approved_sha256": "295e7de6a1c8095c2f6f579329bdfd47a62aef247a5860e27969663ff01e50c8",
+      "capability": [
+        {
+          "mechanism": "A policy can declare a restriction on later actions; it holds until a favorable completed review, reported by the application's verifier, lifts it.",
+          "reference": "docs/policy_reviews.md",
+          "evidence": [
+            "tests/test_review_restrictions.py::test_a_restriction_blocks_a_later_action_of_a_declared_type",
+            "tests/test_review_restrictions.py::test_a_favorable_completed_review_lifts_the_restriction",
+            "tests/test_review_restrictions.py::test_an_unfavorable_review_keeps_the_restriction"
+          ]
+        },
+        {
+          "mechanism": "Notifications and human reviews with a deadline the application reports are recorded; an overdue report blocks nothing by itself.",
+          "reference": "docs/policy_reviews.md",
+          "evidence": [
+            "tests/test_review_follow_up.py::test_a_delivered_notification_is_recorded_once",
+            "tests/test_review_follow_up.py::test_an_overdue_report_is_recorded_and_blocks_nothing_by_itself"
+          ]
+        },
+        {
+          "mechanism": "Conditions the application declares are verified before the effect; a failed condition blocks it.",
+          "reference": "docs/condition_verification.md",
+          "evidence": [
+            "tests/test_policy_condition_producer.py::test_initial_negative_states_have_distinct_codes"
+          ]
+        },
+        {
+          "mechanism": "Controlled checkpoints inside a handler stop its next part when a condition fails there.",
+          "reference": "docs/controlled_checkpoints.md",
+          "evidence": [
+            "tests/test_controlled_checkpoints.py::test_a_false_condition_at_a_checkpoint_stops_the_next_segment"
+          ]
+        },
+        {
+          "mechanism": "A final gate checks, just before the effect, that nothing it depends on has changed.",
+          "reference": "docs/api_reference.md",
+          "evidence": [
+            "tests/test_governed_execution.py::test_a_registration_made_by_an_exporter_after_consumption_blocks_the_effect"
+          ]
+        }
+      ],
+      "applicability": "deployment_decides",
+      "configuration": "deployment_decides",
+      "institutional_outcome": "not_assessed_by_sett",
+      "left_to_deployment": [
+        "Making human oversight effective.",
+        "Ensuring the competence and authority of the people who oversee.",
+        "Being able to interrupt the system safely.",
+        "Classifying the system as high-risk or not.",
+        "The special case of Article 14(5)."
+      ]
+    }
+  ],
+  "comparisons": [
+    {
+      "requirements": [
+        "eu-ai-act/article-2",
+        "eu-ai-act/article-14"
+      ],
+      "relation": "unresolved"
+    },
+    {
+      "requirements": [
+        "eu-ai-act/article-14",
+        "unesco-ai-ethics/paragraph-43"
+      ],
+      "relation": "unresolved"
+    }
+  ],
+  "approval": {
+    "state": "approved",
+    "revision": 1,
+    "digest": "5b514a60cd94c68224f387dd1a713a1077a47c07c98c24434fc6a67c361df1e9",
+    "approved_on": "2026-10-18"
+  }
+}

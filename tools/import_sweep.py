@@ -1,8 +1,9 @@
 """Import every module in the ``sett`` package and report the roster.
 
-The v0.14.0 defensive audit ran this sweep by hand and reported 91/91
-modules importable. Doing it by hand is exactly how it stops being done,
-so it lives here and runs in CI on every supported interpreter instead.
+The v0.14.0 defensive audit reported 91/91 modules importable. That is
+historical evidence for its identified revision and environment. This tool can
+run locally; its presence in CI does not prove execution on other interpreters.
+Every result must retain its own source revision and environment.
 
 Importing is a real check, not a formality: it is what proves that a
 module using an interpreter feature newer than the declared floor fails
@@ -11,7 +12,8 @@ hypothetical. Before v0.14.0 closed, ``sett/persistence/sqlite.py``
 imported ``typing.Self``, which exists from 3.11, while the project
 declared ``requires-python = ">=3.10"``. ``import sett`` raised
 ``ImportError`` on 3.10 and no test caught it, because every test ran on
-3.13. This tool plus the version matrix is the pair that closes that gap.
+3.13. Running this tool on an identified interpreter can expose such a gap;
+a configured matrix alone cannot establish that it was executed.
 
 Optional provider SDKs are deliberately not required. Adapters translate a
 missing SDK into a configuration error at construction time, not at import

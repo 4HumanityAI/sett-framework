@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sett-framework"
-version = "0.14.0"
+version = "0.15.0"
 description = "Scalable Expert-based Task Topology: A multi-agent AI development framework"
 readme = "README.md"
 license = "MIT"
@@ -22,20 +22,19 @@ classifiers = [
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
     "Topic :: Software Development :: Libraries :: Application Frameworks",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
-requires-python = ">=3.11"
+requires-python = ">=3.13"
 dependencies = []  # Core framework has zero mandatory dependencies
 
 [project.optional-dependencies]
 anthropic       = ["anthropic>=0.40.0"]
-openai          = ["openai>=1.40.0"]
-gemini          = ["google-generativeai>=0.8.0"]
+openai          = ["openai>=1.55.3"]
+gemini          = ["google-genai>=1.0.0"]
 google-tts-stt  = ["google-cloud-texttospeech>=2.16.0", "google-cloud-speech>=2.26.0"]
 google-sentiment = ["google-cloud-language>=2.13.0"]
 elevenlabs      = ["requests>=2.31.0"]
@@ -54,8 +53,8 @@ edge-tts        = ["edge-tts>=6.1.0"]
 pocket-tts      = ["pocket-tts>=2.1.0,<3"]
 all             = [
     "anthropic>=0.40.0",
-    "openai>=1.40.0",
-    "google-generativeai>=0.8.0",
+    "openai>=1.55.3",
+    "google-genai>=1.0.0",
     "google-cloud-texttospeech>=2.16.0",
     "google-cloud-speech>=2.26.0",
     "google-cloud-language>=2.13.0",
@@ -76,12 +75,12 @@ dev = [
     # mock applies. Without it, tests/test_adapter_credentials.py fails
     # for a missing package rather than reporting the credential rule it
     # exists to check. It is a test-environment requirement, not a
-    # framework dependency: the core still installs with none (#12).
+    # framework dependency: the core still installs with none.
     "requests>=2.31.0",
 ]
 
 [tool.ruff]
-target-version = "py311"
+target-version = "py313"
 
 [tool.ruff.lint]
 select = [
@@ -97,7 +96,7 @@ select = [
 "sett/__init__.py" = ["E402"]
 
 [project.urls]
-Homepage   = "https://github.com/edudanielv/sett-framework"
+Homepage   = "https://github.com/4HumanityAI/sett-framework"
 Paper-EN   = "https://doi.org/10.5281/zenodo.21287133"
 Paper-ES   = "https://doi.org/10.5281/zenodo.21287355"
 Paper-JP   = "https://doi.org/10.5281/zenodo.21301700"

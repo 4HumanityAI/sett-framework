@@ -3,18 +3,18 @@ Public API audit #5 regressions.
 
 Three findings, one section each:
 
-API-01  Provider SDK exceptions escaped adapter constructors untranslated,
+1.      Provider SDK exceptions escaped adapter constructors untranslated,
         so ``except SETTError`` around "build my adapters" did not hold.
-API-02  The CHANGELOG promised ``validate_duration_seconds()`` covered
+2.      The CHANGELOG promised ``validate_duration_seconds()`` covered
         durations "everywhere", and the five adapters that keep their own
         ``timeout_seconds`` were the everywhere it did not cover.
-API-03  Transitioning an unknown identity is a silent no-op in the
+3.      Transitioning an unknown identity is a silent no-op in the
         idempotency store and in the control registry. That is the
         intended contract, it was simply never written down; these tests
         fix the current behaviour so a later change has to be deliberate.
 
 The provider doubles follow ``test_llm_cloud_adapters.py``: none of
-``openai``, ``anthropic`` or ``google-generativeai`` is installed here, so
+``openai``, ``anthropic`` or ``google-genai`` is installed here, so
 each is stood up as a module in ``sys.modules``. What that proves is what
 SETT controls, namely the translation at the boundary, not that the real SDK
 raises exactly this way.
@@ -48,7 +48,7 @@ class _Exploding:
         raise RuntimeError("provider client refused to start")
 
 
-# ── API-01: constructors translate whatever the SDK raises ───────────────
+# ── constructors translate whatever the SDK raises ───────────────────────
 
 
 def test_openai_constructor_failure_becomes_a_sett_error(monkeypatch):
@@ -59,7 +59,7 @@ def test_openai_constructor_failure_becomes_a_sett_error(monkeypatch):
     from sett.services_llm.openai import OpenAIAdapter
 
     with pytest.raises(SETTLLMAdapterError) as exc_info:
-        OpenAIAdapter(api_key="sk-test")
+        OpenAIAdapter(api_key="sk-test", model="test-model")
     assert isinstance(exc_info.value, SETTError)
     assert isinstance(exc_info.value.__cause__, RuntimeError)
 
@@ -72,38 +72,24 @@ def test_anthropic_constructor_failure_becomes_a_sett_error(monkeypatch):
     from sett.services_llm.anthropic import AnthropicAdapter
 
     with pytest.raises(SETTLLMAdapterError) as exc_info:
-        AnthropicAdapter(api_key="sk-ant-test")
+        AnthropicAdapter(api_key="sk-ant-test", model="test-model")
     assert isinstance(exc_info.value, SETTError)
     assert isinstance(exc_info.value.__cause__, RuntimeError)
 
 
-@pytest.mark.parametrize("failing_call", ["configure", "GenerativeModel"])
-def test_gemini_constructor_failure_becomes_a_sett_error(
-    monkeypatch, failing_call
-):
-    """Gemini builds in two steps; either one failing must translate."""
-
-    def _explode(*args, **kwargs):
-        raise RuntimeError("provider client refused to start")
-
-    genai_module = types.ModuleType("google.generativeai")
-    genai_module.configure = (
-        _explode if failing_call == "configure" else (lambda **kwargs: None)
-    )
-    genai_module.GenerativeModel = (
-        _Exploding if failing_call == "GenerativeModel" else (
-            lambda **kwargs: types.SimpleNamespace()
-        )
-    )
+def test_gemini_constructor_failure_becomes_a_sett_error(monkeypatch):
+    """A client the SDK refuses to build must translate."""
+    genai_module = types.ModuleType("google.genai")
+    genai_module.Client = _Exploding
     google_pkg = types.ModuleType("google")
-    google_pkg.generativeai = genai_module
+    google_pkg.genai = genai_module
     monkeypatch.setitem(sys.modules, "google", google_pkg)
-    monkeypatch.setitem(sys.modules, "google.generativeai", genai_module)
+    monkeypatch.setitem(sys.modules, "google.genai", genai_module)
 
     from sett.services_llm.gemini import GeminiAdapter
 
     with pytest.raises(SETTLLMAdapterError) as exc_info:
-        GeminiAdapter(api_key="google-test")
+        GeminiAdapter(api_key="google-test", model="test-model")
     assert isinstance(exc_info.value, SETTError)
     assert isinstance(exc_info.value.__cause__, RuntimeError)
 
@@ -150,7 +136,7 @@ def test_google_client_lets_lifecycle_exceptions_through():
         build_google_client(factory, credentials=None, adapter_name="Test")
 
 
-# ── API-02: every adapter's own timeout goes through the validator ───────
+# ── every adapter's own timeout goes through the validator ───────────────
 
 
 @pytest.fixture
@@ -164,37 +150,36 @@ def every_provider_module(monkeypatch):
     anthropic_module.Anthropic = lambda **kwargs: types.SimpleNamespace()
     monkeypatch.setitem(sys.modules, "anthropic", anthropic_module)
 
-    genai_module = types.ModuleType("google.generativeai")
-    genai_module.configure = lambda **kwargs: None
-    genai_module.GenerativeModel = lambda **kwargs: types.SimpleNamespace()
+    genai_module = types.ModuleType("google.genai")
+    genai_module.Client = lambda **kwargs: types.SimpleNamespace()
     google_pkg = types.ModuleType("google")
-    google_pkg.generativeai = genai_module
+    google_pkg.genai = genai_module
     monkeypatch.setitem(sys.modules, "google", google_pkg)
-    monkeypatch.setitem(sys.modules, "google.generativeai", genai_module)
+    monkeypatch.setitem(sys.modules, "google.genai", genai_module)
 
 
 def _build(adapter_name: str, **kwargs):
     if adapter_name == "openai":
         from sett.services_llm.openai import OpenAIAdapter
 
-        return OpenAIAdapter(api_key="sk-test", **kwargs)
+        return OpenAIAdapter(api_key="sk-test", **{"model": "test-model", **kwargs})
     if adapter_name == "anthropic":
         from sett.services_llm.anthropic import AnthropicAdapter
 
-        return AnthropicAdapter(api_key="sk-ant-test", **kwargs)
+        return AnthropicAdapter(api_key="sk-ant-test", **{"model": "test-model", **kwargs})
     if adapter_name == "gemini":
         from sett.services_llm.gemini import GeminiAdapter
 
-        return GeminiAdapter(api_key="google-test", **kwargs)
+        return GeminiAdapter(api_key="google-test", **{"model": "test-model", **kwargs})
     if adapter_name == "ollama":
         from sett.services_llm.ollama import OllamaAdapter
 
-        return OllamaAdapter(**kwargs)
+        return OllamaAdapter(**{"model": "test-model", **kwargs})
     if adapter_name == "elevenlabs":
         pytest.importorskip("requests")
         from sett.services_tts_stt.elevenlabs import ElevenLabsTTSAdapter
 
-        return ElevenLabsTTSAdapter(api_key="eleven-test", **kwargs)
+        return ElevenLabsTTSAdapter(api_key="eleven-test", **{"model_id": "test-model", **kwargs})
     raise AssertionError(f"unknown adapter {adapter_name!r}")
 
 
@@ -237,7 +222,7 @@ def test_adapter_default_timeout_is_itself_valid(
     assert adapter._timeout_seconds > 0
 
 
-# ── API-03: an unknown identity is a no-op, on purpose ───────────────────
+# ── an unknown identity is a no-op, on purpose ───────────────────────────
 
 
 REAL_KEY = "real-key"
@@ -324,7 +309,7 @@ def test_releasing_an_unknown_run_id_is_a_no_op():
         assert registry.live_run_ids == (run_id,)
 
 
-# ── API-07: the docstrings stay there ────────────────────────────────────
+# ── the docstrings stay there ────────────────────────────────────────────
 
 
 def _public_definitions_without_docstring() -> list[str]:
@@ -420,7 +405,7 @@ def test_public_init_methods_declare_their_return_type():
     )
 
 
-# ── API-04: the reference documents what the package exports ─────────────
+# ── the reference documents what the package exports ─────────────────────
 
 
 def test_every_exported_symbol_appears_in_the_api_reference():

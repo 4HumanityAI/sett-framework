@@ -2,6 +2,503 @@
 
 All notable changes to the SETT framework are documented here.
 
+## [0.15.0] - 2026-11-23
+
+### Adapter configuration
+
+- Provider model identifiers are application configuration. Anthropic,
+  OpenAI, Gemini and Ollama require `model`; hosted Whisper, Deepgram and
+  Cartesia also require `model`, ElevenLabs requires `model_id`, and local
+  faster-whisper requires `model_size`. Set these explicitly when upgrading.
+  Missing or blank identifiers fail with `adapter.model_missing`. Voice IDs,
+  audio containers and provider connections remain separate settings.
+- Gemini uses the `google-genai` SDK through the optional `gemini` extra.
+  Reinstall that extra when migrating from `google-generativeai`.
+
+A separate policy layer between application policies and authorization:
+declared policy selection, policy identity and provenance, conditions checked
+by application verifiers, review obligations, a private handoff to
+authorization, and an opaque governance journal. Authorization now requires
+verified state from producers the application configures explicitly, and
+fails closed rather than act on unverified state.
+
+### Security and audit corrections
+
+- Allow OpenAI callers to select `max_completion_tokens` explicitly and omit
+  `temperature` with `None`. Preserve legacy request defaults; reject conflicting
+  token limits before sending a request, without model-name inference or retries.
+- Collect all visible Anthropic text blocks in order, excluding thinking blocks
+  and retaining the empty-string result when no visible text is present.
+- Accept `GEMINI_API_KEY` after `GOOGLE_API_KEY` when no explicit key is supplied.
+- Correct the documented Ollama import and document safe structured error
+  logging, credential ownership and the limits of offline provider checks.
+
+- Close Ollama HTTP error responses and reuse the shared HTTP status
+  classification without retrying requests or exposing provider messages.
+- Preserve the denial verdict from a real policy outcome in the executor's
+  authorization error, so controlled execution reports it as rejected while
+  technical blocks and unmet approval requirements remain failures.
+
+- Snapshot action identity before callbacks and payload copying, including
+  execution without Authorization Ruler. Fresh root contexts supplied to
+  `submit()` retain recoverable trace ancestry.
+- Keep provider messages, credentials and credential paths out of public
+  Ollama and Google authentication diagnostics. Provider causes remain local
+  diagnostic data and must not be exported as sanitized output.
+- Refuse Ollama redirects and credential-bearing base URLs; bound response
+  reads with `max_response_bytes` (16 MiB by default). Reject invalid AssemblyAI
+  transcript identifiers before constructing a polling request.
+- Report Azure's configured audio container and reject per-call format
+  overrides that change it. Construct a separate adapter for another container.
+- Normalize invalid cancellation reason text to a fixed code and preserve
+  authorization diagnostics and verdict classification in controlled failures.
+- Require actual durability enum members and mark broken trace chains as
+  requiring reconciliation. Convert excessive payload-copy recursion to a
+  framework validation error without running the handler.
+- Fold Unicode compatibility forms and accents in sensitive-key checks;
+  document their heuristic scope and the unbounded ephemeral event vocabulary.
+- Correct the final authorization-gate description, serialized-state migration
+  limits and release archive name without changing prior release records.
+- Require an error type in `retry_on` before anything is repeated. An adapter
+  error marked `retryable` still classifies as transient for the circuit
+  breaker, but it no longer causes a retry by itself, so `max_attempts` alone
+  gives one attempt. Applications that relied on the implicit retry must list
+  the error type and, for effects, supply an idempotency key.
+- Run every submission under its own handler context. `submit()` called from
+  inside a controlled handler no longer inherits the outer attempt's identity;
+  a controlled handler reached that way fails closed.
+- Keep a provider's `Retry-After` inside the policy's `max_backoff_seconds`. A
+  longer request ends the call without a retry and without waiting; controlled
+  submissions report `retry.provider_delay_exceeded`.
+- Stop sending `temperature` from `AnthropicAdapter` unless the application
+  sets it; `DEFAULT_TEMPERATURE` is now `None`. A value the installed SDK does
+  not accept raises `adapter.configuration_invalid` before any request. The
+  adapter was exercised through the real SDK against a local test server with
+  `anthropic` 0.40.0, 1.17.0 and 2.8.0, not against the provider's service.
+- Build the Anthropic and OpenAI clients with SDK retries disabled, so one
+  adapter call sends one request. Opt in to retries with
+  `execute_with_resilience()`. The `openai` extra now requires 1.55.3 or newer;
+  1.40.0 could not construct a client with current `httpx`.
+- Report unusable Ollama responses as `adapter.invalid_response`: bodies that
+  are not UTF-8 JSON, JSON that is not an object, and `response` or
+  `message.content` fields that are present but are not text. An absent field
+  is still an empty answer.
+- Read `Retry-After` from the header type `urllib` delivers, so Ollama errors
+  carry it.
+- Check an ElevenLabs `voice_id`, an Azure `region` and every configurable
+  voice `endpoint` or `base_url` before a request is built. Values that could
+  change the request path, query or host are refused with a configuration
+  error. `http` endpoints remain accepted.
+- Keep environment files, coverage data, editor settings and swap files out of
+  the release archive. An `.env.example` ships only when every value in it is
+  empty.
+- Move the internal project-name guard out of the public tree. It remains a
+  private control run before publication.
+
+### Added
+
+- Added `sett.policy_ruler` and `PolicyRuler`, which owns policy governance:
+  it registers policies, reads the declared selection, evaluates and composes
+  the policies, and keeps their obligation state. Final authority and
+  receipts stay with `AuthorizationRuler`. `PolicyRuler.evaluate()` runs the
+  same engine for inspection only; its `PolicyEvaluation` is never usable as
+  authority. See `docs/policy_ruler.md`.
+- Added policy selection values. A `PolicySelection` is the application's
+  declaration of which policies apply to one exact action, and why, with one
+  `PolicyApplicability` per policy; a `PolicySelectionResolver` supplies it.
+  `PolicyRuler` reads it before running any policy, and the values decide
+  nothing by themselves. See `docs/policy_selection.md`.
+- Added `PolicyBinding`, `PolicyOrigin`, and `PolicySourceReference`. A
+  binding names a policy and its version and records where its requirements
+  come from. It is declared metadata, not proof. See
+  `docs/policy_identity.md`.
+- Added policy conditions. A `PolicyCondition` declares a check that must
+  pass before an action, the verifier that performs it, and how long a
+  positive result may be used. A `ConditionVerifier` is the application's
+  callback; it reports a `ConditionVerification`, and the policy layer checks
+  every result against what it expected. See `docs/policy_conditions.md` and
+  `docs/condition_verification.md`.
+- Added review obligations. A policy can declare, on its decision, a
+  notification after the action, a human review with a deadline, or a
+  restriction on declared future actions. SETT carries the declarations and
+  the facts an application reports through a `ReviewVerifier`; it runs no
+  review. See `docs/policy_reviews.md`.
+- Added a final gate before a governed effect. After the effect barrier
+  and its trace exporters, which run after the receipt is consumed,
+  `SETTExecutor` checks that neither generation changed and that no
+  deadline was reached; otherwise the handler does not run, the receipt
+  stays consumed, and `handler.blocked` records the existing reason code.
+  The trace event `authorization.receipt_verified` gains `decision_ref`,
+  which names the issuing attempt and so its decision record. See
+  `docs/api_reference.md`.
+- Added controlled checkpoints. `PolicyRuler(controlled_checkpoints=...)`
+  declares ordered checkpoints per action type, a condition can name one,
+  and a controlled handler passes each with
+  `HandlerContext.check_policy_conditions()`. There SETT verifies that
+  checkpoint's conditions and checks the earlier ones again; a failure
+  stops the next part of the handler, undoes nothing, is reported as
+  `ExecutionStatus.PARTIAL` and is never retried. A plain handler is
+  refused for such an action type. See `docs/controlled_checkpoints.md`.
+- Added the review follow-up. `PolicyRuler.follow_up_reviews()`, called when
+  the application chooses, asks each declared obligation's verifier once and
+  writes each newly verified fact to the governance journal as a review
+  record (schema `sett.governance.review`), confirmed before it is
+  reported; records already in the journal are confirmed durable before
+  they are trusted. A record grants nothing and lifts no restriction. SETT decides
+  no deadline: the application reports overdue through its verifier. See
+  `docs/policy_reviews.md`.
+- Added governance recovery. `read_governance_recovery()` reads the
+  governance journal and a restored trace together and reports, for each
+  decision, a denial, an approval requirement, a known effect or an uncertain
+  one, with each review obligation's records. Missing trace events leave a
+  grant's use unknown, even for an intact prefix of the correct trace.
+  Positive observations require an intact chain and matching trace and
+  authorization-attempt identities. Decision records and review records
+  come from one journal read. It
+  restores no receipt and resumes nothing; continuing is a new submission.
+  SETT gives an approval-required outcome no expiry, which belongs to the
+  application. See `docs/governance_recovery.md`.
+- Added explanations. `explain()` in `sett.policy_ruler.explanation` builds,
+  from one decision record or from the error of a blocked attempt, an
+  operational view and a public view, each a closed set of fields with
+  stable codes and no sentences. The public view shows SETT's own codes and
+  only the application values the application approves; the rest is
+  withheld and counted. Next steps appear only as the application declares
+  them. See `docs/explanations.md`.
+- Added working correspondences with external instruments, outside the
+  package. Records in `governance/mappings/` state what SETT's mechanisms do
+  for selected provisions and the tests that show it, and name what stays
+  with the deployment; `tools/correspondence.py` validates them and
+  generates their pages. The format is internal and experimental. A record
+  decides no applicability, assesses no institution's requirement and holds
+  no score, and an approval covers one exact revision. Records for three
+  instruments are included, each covering selected provisions only: the EU
+  Artificial Intelligence Act, NIST AI RMF 1.0 and the UNESCO
+  Recommendation on the Ethics of Artificial Intelligence. See
+  `docs/working_correspondences.md`.
+- Added the policy-to-authorization handoff. Authorization never accepts an
+  evaluation result from outside: it opens its own private invocation on the
+  policy ruler, which binds the exact result to that invocation, and the
+  binding is checked again before a receipt is issued and before authority
+  is used. See `docs/policy_handoff.md`.
+- Added `GovernanceJournal` in `sett.policy_ruler.persistence`, with its
+  record, submission, and result values. It keeps opaque, versioned records
+  on a dedicated evidence stream, with an exact byte format, explicit limits,
+  and explicit confirmation of durability, and it never interprets what it
+  stores. `confirm(position)` checks again that an entry is durable as
+  required, without appending. See `docs/governance_journal.md`.
+- Added `SETTPolicyConfigurationError`, raised when the policy layer cannot
+  establish a valid binding or a policy value is invalid. It is a
+  `SETTConfigurationError`, not a `SETTAuthorizationError`, and it is exported
+  by `sett.policy_ruler` and `sett.exceptions`, not by top-level `sett`.
+- Added `SETTAuthorizationError.policy_observations`. On its covered initial
+  evaluation paths it is a possibly partial tuple of the admitted policy ID,
+  version, and verdict rows; otherwise it is `None`. It is diagnostic data,
+  not authority or a durable audit record.
+- Added authorization failure details. `SETTAuthorizationError` gains
+  `policy_observation_reason_codes`, `failed_condition`,
+  `attempted_conditions`, `authorization_attempt_id`, and
+  `original_reason_code`, and `AuthorizationOutcome` gains
+  `authorization_attempt_id`. Each call to `authorize()` or
+  `verify_and_consume()` gets a random identifier that its error or outcome
+  and all its evidence events carry. Each field is `None` where it does not
+  apply, and nothing that existed changes. See
+  `docs/authorization_failure_details.md`.
+- Added `templates/consent_model.py` and `docs/consent_model.md`: a
+  conceptual consent model to modify or replace. A policy declares a consent
+  check as a condition, and the model's verifier looks for a current
+  consent record that covers the request. Consent belongs to the
+  application; the model does not supply the consent state that
+  authorization requires.
+- Added `PolicyRuler(implementation_owned_consent=...)`. With `True`, an
+  implementation that owns consent declares it, and an internal producer
+  records that declaration in the consent state; SETT verifies no consent.
+  The default, `False`, changes nothing.
+- Added decision records. `PolicyRuler(governance_journal=...)` installs
+  the durability producer: every completed bound evaluation writes one
+  record (schema `sett.governance.decision`, version 4) to the governance
+  journal, and no receipt exists before that record is confirmed at the
+  journal's required durability; otherwise the attempt blocks with
+  `authorization.decision_record_unconfirmed`. The record carries settled
+  facts and a request fingerprint, not the request payload. Each policy row
+  keeps the origins and profile its binding declared, and each verified
+  condition the requirements it covers; the results of informative
+  policies, which decide nothing, are kept with them.
+  `read_decision_records()` returns them as values and restores no
+  authority. See `docs/decision_records.md`.
+- Added the review producer. With `PolicyRuler(review_verifiers=...)` and a
+  governance journal, a restriction on declared future actions that an
+  earlier decision recorded blocks later actions of those types until the
+  application's verifier reports a favorable completed review. An
+  authorization is never blocked by the obligations it declared itself; that
+  exemption comes from the decision record it confirmed, never from the
+  action identifier, so a later action that reuses the identifier is still
+  restricted. Notifications
+  and reviews with a deadline never block before an effect. Each failure has
+  its own `policy.review_*` code and `authorization.review_*` translation,
+  and decision records add the declared review obligations and the
+  restrictions each action cleared. See `docs/policy_reviews.md`.
+- `ElevenLabsTTSAdapter` accepts `output_format`, an ElevenLabs MP3 format
+  identifier such as `mp3_44100_128`, sent as the provider's
+  `output_format` query parameter. Other values fail at construction with
+  `adapter.output_format_invalid`. The default, `None`, leaves the request
+  unchanged.
+- Added the `policy.*` reason codes and the `authorization.*` codes of the
+  bound policy path. See `docs/policy_reason_codes.md` and
+  `docs/authorization_reason_codes.md`.
+- Added `docs/terminology.md`: what each SETT term means, why it has that
+  name, and where its boundary is.
+- Added `examples/governed_action.py`: one governed action end to end, with
+  every state producer configured. A granted refund runs its handler once;
+  a refund whose declared condition is not met, and one the policy denies,
+  run nothing. The journal keeps the two decision records, and each
+  decision is explained.
+
+### Changed
+
+- Shared governance modules now live in `sett._governance` and Google
+  credential helpers in `sett._adapters.google_auth`. Previous import paths
+  remain available. Import compatibility does not migrate serialized state.
+  Legacy `PolicyDecision` pickles are not a supported migration format.
+  Successful deserialization does not establish that the new required fields
+  are present; even representing an incomplete value can fail. Reconstruct
+  decisions through the current constructors with explicit `conditions` and
+  `review_obligations`; SETT does not infer empty declarations for legacy
+  serialized objects.
+
+- `AuthorizationRuler` requires an injected `PolicyRuler` through
+  `policy_ruler`, built with the same clock and evidence sink objects.
+  Omitting it fails with `authorization.policy_ruler_missing`, anything other
+  than a `PolicyRuler` fails with `authorization.policy_ruler_invalid`, and a
+  different clock or evidence sink fails with
+  `authorization.policy_ruler_configuration_mismatch`. An optional
+  `selection_resolver` must be the one the policy ruler holds.
+- `AuthorizationRuler.register_policy()` requires a `binding`. The 0.14
+  two-argument call fails with `authorization.policy_binding_required`.
+- `PolicyDecision` and its `grant()`, `deny()`, and `require_approval()`
+  factories require keyword-only `conditions` and `review_obligations`, with
+  no default. Omitting them raises `TypeError`, and `None` is invalid: SETT
+  never infers an empty declaration for code that says nothing.
+- `SETTAuthorizationError` and `SETTAuthorizationConfigurationError` are
+  never retried by a `RetryPolicy`, even when `retry_on` names them, like a
+  filter rejection.
+- Consuming a receipt requires the exact receipt object that was issued. An
+  equal copy fails with `authorization.policy_binding_unavailable`.
+- Moved `PolicyDecision` and `AuthorizationPolicy` to `sett.policy_ruler`
+  (`models` and `contracts`). Imports through `sett.authorization_ruler`, its
+  `models` and `contracts` modules, and top-level `sett` return the same
+  objects. The new selection and identity values are exported by both
+  `sett.policy_ruler` and `sett.authorization_ruler`; top-level `sett` gains
+  no export.
+- Moved the shared authorization values, verdicts, validation, clock, and
+  evidence contracts to private modules, so the policy package does not
+  import the authorization package. Public imports are unchanged. The
+  `__module__` of a moved class names its new location; no pickle or
+  cross-process compatibility follows from the move.
+- `AuthorizationRuler` and `SystemAuthorizationClock` are implemented in
+  `sett.authorization_ruler.authorizer`, and `PolicyRuler` in
+  `sett.policy_ruler.evaluator`. `sett.authorization_ruler.ruler` and
+  `sett.policy_ruler.ruler` re-export the same classes; private helpers and
+  former module globals are not covered.
+- `examples/governance_card.py` now wires a `PolicyRuler`, declared bindings,
+  and a selection resolver. It configures no verified-state producers, so
+  every governed effect in it is refused at the authorization handoff with
+  `authorization.policy_evaluation_incomplete`, and the card records that
+  gate.
+- The project homepage and repository links point to
+  `github.com/4HumanityAI/sett-framework`.
+- SETT tracks the latest stable Python release. Python 3.15 is the version
+  it is developed and verified against, 3.13 and 3.14 remain supported, and
+  `requires-python` is `>=3.13`. Python 3.11 and 3.12 are no longer
+  supported.
+- The CI workflow keeps nothing it builds. Its package job, now named
+  "Package verification", still builds the wheel, the source distribution
+  and the release archive, installs the wheel into an empty environment,
+  runs `pip check` and imports the installed package, but no longer uploads
+  them as downloadable artifacts. The matrix runs Python 3.13, 3.14 and
+  3.15.
+
+### Fixed
+
+- Restrict the release line-ending guard to text files, preserving declared
+  binary formats such as PNG. Regression checks retain CRLF detection in
+  source, documentation and files without a known extension.
+
+- Excluded generated governance card HTML and JSON files from the source
+  archives and ignore them in every working directory.
+
+- The executor now rechecks the consumed grant after start-event exporters
+  and payload copying, immediately before handler entry. A late rejection
+  records a blocked effect and leaves the receipt consumed.
+- ElevenLabs TTS and the shared HTTP voice transport reject redirects.
+  Gladia checks the origin of each polling URL before attaching its API key.
+- `TraceRecorder.restore()` reported every governed effect that had
+  started, even a completed one, with its `handler.authorized` boundary
+  unresolved, so `RecoveryReport.requires_reconciliation` was true for it.
+  `handler.started` ends that boundary and starts its own, and the pairing
+  treated it only as a start. It now closes the first boundary before
+  opening the second. The defect is also present in 0.14.0.
+
+### Documentation
+
+- `docs/SETT_Conventions.md`: each convention opens with a one-sentence
+  summary. Convention 10 now asks for an explicit, approved migration when a
+  change cannot keep a contract; conventions 14 and 15 now describe
+  author-led evolution with community proposals, and explicit scope with
+  preserved contracts. A new section describes how changes are approved.
+- `docs/api_reference.md` documents the policy layer and opens each top-level
+  section with a one-sentence summary. Its `SETTExecutor` section notes when a
+  receipt can be issued, and its exceptions table now lists
+  `SETTAuthorizationError`, `SETTAuthorizationConfigurationError`, and
+  `SETTPolicyConfigurationError`.
+- `docs/authorization_reason_codes.md` adds the codes of the bound policy
+  path, the condition and review diagnostics, and a "Current limitation"
+  section that explains when no receipt is issued. The README states the same
+  limitation
+  and gains a project status section.
+- `docs/authorization_failure_details.md` describes the failure details,
+  and two companion documents record the decisions behind them.
+- `docs/concepts.md` separates architectural conventions from runtime
+  enforcement: private memory is isolated by convention, not by a runtime
+  boundary, and SETT provides the pieces to re-evaluate a result, not an
+  automatic review workflow.
+- `CONTRIBUTING.md` explains how decisions are made. Documents now record
+  only the version that introduced them, without a "Last reviewed" line.
+- `docs/getting_started.md` and the README state which Python versions SETT
+  supports and the ones the suite passed on locally before release.
+- Docstrings and comments across the package describe the current behavior
+  without internal review labels. No code changed with them.
+- Added `tests/test_no_internal_process_labels.py`, which keeps internal
+  process labels out of the public tree. Released changelog entries are
+  excluded, because published history is not rewritten.
+
+### Compatibility
+
+- Authorization issues a receipt only when every verified state it requires
+  has a producer: condition verifiers, the implementation's consent
+  declaration, a governance journal and review verifiers, each configured
+  explicitly on `PolicyRuler`. Without them, every `authorize()` call that
+  reaches state verification fails with
+  `authorization.policy_evaluation_incomplete`, even when every policy would
+  grant, and a handler that requires authorization cannot run. An
+  application that used the 0.14 authorization path has every governed
+  effect refused until it configures them. This is deliberate: SETT blocks
+  rather than act on unverified state. A policy denial during such an attempt is visible only in
+  `SETTAuthorizationError.policy_observations`, with its reason codes in
+  `policy_observation_reason_codes`.
+- Code written against the 0.14 authorization API must change before it
+  runs: `AuthorizationRuler` needs a `PolicyRuler`, each `register_policy()`
+  call needs a `binding`, and every `PolicyDecision` needs explicit
+  `conditions` and `review_obligations`. Each omission fails closed, with
+  the reason code given under Changed or with `TypeError`.
+  `examples/governed_action.py` shows a complete configuration.
+  For example, replace `PolicyDecision.grant(policy_id)` with
+  `PolicyDecision.grant(policy_id, conditions=(), review_obligations=())`
+  only when that policy actually declares no conditions or review obligations.
+- Applications that do not configure authorization are not required to add a
+  policy layer or governance journal. They must still review the Python,
+  adapter, retry and other behavior changes in this release; authorization
+  being optional does not make the whole upgrade backward-compatible.
+- No 0.14 public symbol was removed or renamed, and top-level `sett` exports
+  the same names. Classes that moved keep their 0.14 import paths.
+- No new mandatory dependency. Supported Python versions are 3.13, 3.14, and
+  3.15. Python 3.11 and 3.12 are no longer supported: an application on
+  either must move to 3.13 or newer before upgrading.
+
+#### Migrating from v0.14.0
+
+Review these steps before replacing an existing installation. Adapter and retry
+changes also apply to applications that do not configure authorization.
+
+1. **Update the environment.** Use Python 3.13 or newer and reinstall SETT from
+   the new source tree with the optional extras your application uses. Gemini
+   now uses `google-genai`, not `google-generativeai`; the OpenAI extra requires
+   `openai>=1.55.3`. SETT is not published on PyPI.
+2. **Supply provider model identifiers.** Applications that relied on adapter
+   defaults must pass `model`, `model_id` or `model_size`, as listed in
+   [Provider model configuration](docs/adapters.md#provider-model-configuration).
+   Choose an identifier available to your deployment; SETT supplies no fallback.
+   Voice IDs and audio formats are separate configuration. Review the adapter
+   changes above if your application overrides formats, endpoints or temperature.
+3. **Declare policy selection before wiring authorization.** Build a
+   `PolicyBinding` for each policy and a `PolicySelectionResolver` that declares
+   applicability for the exact request. Pass the resolver to `PolicyRuler`;
+   omitting it raises `authorization.policy_selection_resolver_missing` during
+   construction. Registration does not substitute for selection. Required and
+   informative policies have different roles, and no applicable required policy
+   means `authorization.policy_required_empty`, not permission. Supply the
+   declared applicability facts with their provenance; SETT does not infer them.
+   See [Declared selection](docs/policy_ruler.md#declared-selection).
+4. **Configure the required state producers.** Explicitly supply condition
+   verifiers, a governance journal and review verifiers. An empty verifier
+   sequence is a declaration that must match the applicable requirements;
+   `None` installs no producer and cannot stand in for that declaration. Set
+   `implementation_owned_consent=True` only when the application owns consent;
+   it records that responsibility and is not evidence of consent verification.
+   Choose the journal's storage and durability for the deployment; the in-memory
+   example is not durable across process exit. Inject the resulting `PolicyRuler`
+   into `AuthorizationRuler`, using the same evidence-sink object and, if a clock
+   is supplied explicitly, the same clock object. Omitting the authorization
+   clock uses the policy ruler's clock. See
+   [Construction](docs/policy_ruler.md#construction) and the complete
+   [governed action example](examples/governed_action.py).
+5. **Update policy calls and receipt handling.** Add `binding` to policy
+   registration and explicit `conditions` and `review_obligations` to the
+   `PolicyDecision` constructor and all three factories: `grant()`, `deny()` and
+   `require_approval()`. Empty declarations mean no obligations of that kind;
+   they must not replace missing application data. Retain the exact issued
+   receipt object for consumption; an equal copy is rejected. Reconstructing a
+   decision or loading stored data does not restore authority. See
+   [Migrating stored policy decisions](docs/getting_started.md#migrating-stored-policy-decisions).
+6. **Review retries explicitly.** `max_attempts` alone no longer permits a retry,
+   even if an adapter marks an error `retryable`. Name the permitted error types
+   in `retry_on`; errors that SETT never retries remain excluded. For adapter
+   calls through `execute_with_resilience()`, also declare
+   `operation_is_idempotent=True` only when that is true. A retry-enabled effect
+   submission requires an `idempotency_key`; that key does not make an external
+   service idempotent. Anthropic and OpenAI SDK retries are disabled. A provider
+   `Retry-After` above `max_backoff_seconds` ends the call without sleeping or
+   retrying: `execute_with_resilience()` raises the original error and
+   `submit_controlled()` reports `retry.provider_delay_exceeded`. See
+   [Resilience](docs/adapter_contract.md#10-resilience) and the
+   [API reference](docs/api_reference.md).
+
+Existing public import paths remain available, but import compatibility does not
+migrate serialized objects or preserve pending authority across an upgrade.
+Review the changes above against your application's configuration and stored
+data before resuming governed work.
+
+### Validation
+
+- The test suite covers policy selection, identity and provenance,
+  conditions and their verification, review declarations and facts, the
+  policy-to-authorization handoff with its fault cases and controlled
+  concurrent interleavings, the governance journal, policy observations and
+  the other authorization failure details, import compatibility for the
+  moved modules, the label guard, the consent model template, the ElevenLabs
+  output format, the consent declaration, the decision records, the review
+  producer and the identity of the authorization it exempts, governed
+  execution through the executor, controlled checkpoints, the review
+  follow-up, governance recovery with its stopping points, trace coverage
+  and single journal read, the pairing of trace boundaries on restore,
+  explanations with their disclosure checks, policy origins in decision
+  records, the working correspondences tooling, alike requirements of
+  different policies verified separately, the informative results kept in
+  decision records, review records confirmed durable before they are
+  trusted, and the governed action example.
+- Release measurements are recorded against exact source hashes and
+  environments. Earlier measurements do not establish that modified bytes
+  pass on another interpreter or in an installed artifact.
+- Release verification includes the wheel and source distribution builds,
+  clean installation, imports and examples against the installed package.
+  These checks were run on the exact source of this release.
+- This release was validated on Windows with Python 3.13, 3.14 and 3.15.
+  Linux and macOS have not been validated for this release. The CI workflow
+  lists them, but those cells were not run on this source.
+- Not established by this release: any measurement on Linux or macOS,
+  coverage, live provider calls against any external service, and any
+  measurement of the durability declarations against real power loss.
+
 ## [0.14.0] - 2026-09-03
 
 Opt-in durable evidence, versioned state, pure recovery, explicit audit

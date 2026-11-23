@@ -1,6 +1,7 @@
 """AssemblyAI asynchronous speech-to-text adapter."""
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from sett.core_ruler.adapter import (
@@ -20,6 +21,7 @@ from sett.services_tts_stt._http import (
     poll_json,
     require_requests,
     response_json,
+    validated_endpoint,
 )
 from sett.services_tts_stt.base import STTBase
 
@@ -43,7 +45,12 @@ class AssemblyAISTTAdapter(STTBase):
             provider="assemblyai",
             adapter_name=type(self).__name__,
         )
-        self._base_url = base_url.rstrip("/")
+        self._base_url = validated_endpoint(
+            base_url,
+            provider="assemblyai",
+            adapter_name=type(self).__name__,
+            parameter="base_url",
+        ).rstrip("/")
         self._timeout_seconds = validate_duration_seconds(
             timeout_seconds, name="timeout_seconds"
         )
@@ -112,8 +119,12 @@ class AssemblyAISTTAdapter(STTBase):
                 operation="submit_transcription",
             )
             try:
-                transcript_id = str(submitted["id"])
-            except (KeyError, TypeError) as error:
+                transcript_id = submitted["id"]
+                if not isinstance(transcript_id, str) or re.fullmatch(
+                    r"[A-Za-z0-9_-]+", transcript_id
+                ) is None:
+                    raise ValueError("Invalid transcript identifier")
+            except (KeyError, TypeError, ValueError) as error:
                 raise self._invalid(error, "submit_transcription") from error
 
             def get_result(request_timeout: float | None) -> Any:

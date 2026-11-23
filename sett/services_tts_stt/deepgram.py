@@ -12,6 +12,7 @@ from sett.core_ruler.adapter import (
     ConnectivityRequirement,
     adapter_call_scope,
     normalized_adapter_error,
+    required_model,
 )
 from sett.core_ruler.lifecycle import pop_lifecycle_kwargs, validate_duration_seconds
 from sett.exceptions import SETTServiceAdapterError
@@ -20,6 +21,7 @@ from sett.services_tts_stt._http import (
     credential,
     require_requests,
     response_json,
+    validated_endpoint,
 )
 from sett.services_tts_stt._language import resolve_language_code
 from sett.services_tts_stt.base import STTBase
@@ -36,7 +38,7 @@ class DeepgramSTTAdapter(STTBase):
         self,
         api_key: str | None = None,
         *,
-        model: str = "nova-3",
+        model: str | None = None,
         language_code: str | None = None,
         language: str | None = None,
         endpoint: str = "https://api.deepgram.com/v1/listen",
@@ -50,7 +52,12 @@ class DeepgramSTTAdapter(STTBase):
             provider="deepgram",
             adapter_name=type(self).__name__,
         )
-        self._model = model.strip() or "nova-3"
+        self._model = required_model(
+            model,
+            error_type=SETTServiceAdapterError,
+            provider="deepgram",
+            adapter_name=type(self).__name__,
+        )
         self._language_code = resolve_language_code(
             language_code,
             language,
@@ -59,7 +66,9 @@ class DeepgramSTTAdapter(STTBase):
             adapter_name=type(self).__name__,
             operation="configure",
         )
-        self._endpoint = endpoint.rstrip("?")
+        self._endpoint = validated_endpoint(
+            endpoint, provider="deepgram", adapter_name=type(self).__name__
+        ).rstrip("?")
         self._timeout_seconds = validate_duration_seconds(
             timeout_seconds, name="timeout_seconds"
         )

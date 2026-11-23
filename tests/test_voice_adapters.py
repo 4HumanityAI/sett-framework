@@ -67,13 +67,13 @@ def fake_requests(monkeypatch):
 
 def test_remote_roster_is_instantiable_and_declares_honest_contracts(fake_requests):
     adapters = [
-        DeepgramSTTAdapter("key"),
+        DeepgramSTTAdapter("key", model="test-model"),
         AzureSTTAdapter("key", "eastus"),
         AzureTTSAdapter("key", "eastus"),
         AssemblyAISTTAdapter("key"),
         GladiaSTTAdapter("key"),
-        WhisperSTTAdapter("key"),
-        CartesiaTTSAdapter("voice", "key"),
+        WhisperSTTAdapter("key", model="test-model"),
+        CartesiaTTSAdapter("voice", "key", model="test-model"),
     ]
     for adapter in adapters:
         assert_adapter_contract(adapter, adapter.capabilities.kind)
@@ -84,7 +84,7 @@ def test_remote_roster_is_instantiable_and_declares_honest_contracts(fake_reques
 def test_local_and_community_roster_is_instantiable_without_loading_models():
     adapters = [
         LocalTTSAdapter(),
-        LocalSTTAdapter(),
+        LocalSTTAdapter(model_size="test-model"),
         KokoroTTSAdapter(),
         PiperTTSAdapter("voice.onnx"),
         EdgeTTSAdapter(),
@@ -99,7 +99,7 @@ def test_deepgram_transcription_uses_documented_binary_endpoint(fake_requests):
     fake_requests.responses.append(
         Response({"results": {"channels": [{"alternatives": [{"transcript": "hello"}]}]}})
     )
-    adapter = DeepgramSTTAdapter("secret", language="en-US")
+    adapter = DeepgramSTTAdapter("secret", language="en-US", model="test-model")
     assert adapter.transcribe(b"wav", language_code="es_AR") == "hello"
     method, url, kwargs = fake_requests.calls[0]
     assert method == "POST"
@@ -205,11 +205,11 @@ def test_azure_rejects_conflicting_call_language_names(
 
 def test_whisper_and_cartesia_requests_are_explicit(fake_requests):
     fake_requests.responses.extend([Response({"text": "hosted"}), Response(content=b"mp3")])
-    whisper = WhisperSTTAdapter("key")
-    cartesia = CartesiaTTSAdapter("voice", "key")
+    whisper = WhisperSTTAdapter("key", model="test-model")
+    cartesia = CartesiaTTSAdapter("voice", "key", model="test-model")
     assert whisper.transcribe(b"wav", language_code="es-AR") == "hosted"
     assert cartesia.synthesize("hello", language_code="es_AR") == b"mp3"
-    assert fake_requests.calls[0][2]["data"]["model"] == "whisper-1"
+    assert fake_requests.calls[0][2]["data"]["model"] == "test-model"
     assert fake_requests.calls[0][2]["data"]["language"] == "es"
     assert fake_requests.calls[1][2]["json"]["voice"] == {"id": "voice"}
     assert fake_requests.calls[1][2]["json"]["language"] == "es-AR"
@@ -218,7 +218,7 @@ def test_whisper_and_cartesia_requests_are_explicit(fake_requests):
 def test_cartesia_refuses_blank_voice_id_as_configuration_error(fake_requests):
     for blank in ("", "   ", "\t\n"):
         with pytest.raises(SETTServiceAdapterError) as excinfo:
-            CartesiaTTSAdapter(blank, "key")
+            CartesiaTTSAdapter(blank, "key", model="test-model")
         error = excinfo.value
         assert error.kind is AdapterErrorKind.CONFIGURATION
         assert error.provider == "cartesia"
@@ -245,7 +245,7 @@ def test_gladia_upload_submit_and_poll(fake_requests):
     fake_requests.responses.extend(
         [
             Response({"audio_url": "https://upload"}),
-            Response({"id": "job", "result_url": "https://result"}),
+            Response({"id": "job", "result_url": "https://api.gladia.io/v2/pre-recorded/job"}),
             Response(
                 {
                     "status": "done",
@@ -265,7 +265,7 @@ def test_gladia_upload_submit_and_poll(fake_requests):
     "adapter, invoke",
     [
         (
-            lambda: DeepgramSTTAdapter("key"),
+            lambda: DeepgramSTTAdapter("key", model="test-model"),
             lambda value: value.transcribe(
                 b"wav", language_code="es-AR", language="en-US"
             ),
@@ -277,13 +277,13 @@ def test_gladia_upload_submit_and_poll(fake_requests):
             ),
         ),
         (
-            lambda: WhisperSTTAdapter("key"),
+            lambda: WhisperSTTAdapter("key", model="test-model"),
             lambda value: value.transcribe(
                 b"wav", language_code="es-AR", language="en-US"
             ),
         ),
         (
-            lambda: CartesiaTTSAdapter("voice", "key"),
+            lambda: CartesiaTTSAdapter("voice", "key", model="test-model"),
             lambda value: value.synthesize(
                 "hola", language_code="es-AR", language="en-US"
             ),
@@ -438,7 +438,7 @@ def test_local_stt_lazily_loads_and_consumes_segment_generator():
             None,
         )
     )
-    adapter = LocalSTTAdapter(model_factory=lambda *args, **kwargs: model)
+    adapter = LocalSTTAdapter(model_factory=lambda *args, **kwargs: model, model_size="test-model")
     assert adapter.transcribe(b"wav") == "hello world"
 
 
@@ -450,7 +450,7 @@ def test_local_stt_normalizes_a_bcp47_language_code_for_whisper():
         return iter([SimpleNamespace(text="hola")]), None
 
     model = SimpleNamespace(transcribe=fake_transcribe)
-    adapter = LocalSTTAdapter(model_factory=lambda *args, **kwargs: model)
+    adapter = LocalSTTAdapter(model_factory=lambda *args, **kwargs: model, model_size="test-model")
 
     assert adapter.transcribe(b"wav", language_code="ES-AR") == "hola"
     assert received_kwargs["language"] == "es"
@@ -464,7 +464,7 @@ def test_local_stt_accepts_a_bare_language_code_unchanged():
         return iter([]), None
 
     model = SimpleNamespace(transcribe=fake_transcribe)
-    adapter = LocalSTTAdapter(model_factory=lambda *args, **kwargs: model)
+    adapter = LocalSTTAdapter(model_factory=lambda *args, **kwargs: model, model_size="test-model")
 
     adapter.transcribe(b"wav", language_code="ja")
     assert received_kwargs["language"] == "ja"
@@ -478,7 +478,7 @@ def test_local_stt_keeps_language_as_a_compatibility_alias():
         return iter([]), None
 
     model = SimpleNamespace(transcribe=fake_transcribe)
-    adapter = LocalSTTAdapter(model_factory=lambda *args, **kwargs: model)
+    adapter = LocalSTTAdapter(model_factory=lambda *args, **kwargs: model, model_size="test-model")
 
     adapter.transcribe(b"wav", language="pt-BR")
     assert received_kwargs["language"] == "pt"
@@ -492,7 +492,7 @@ def test_local_stt_accepts_equivalent_language_argument_names():
         return iter([]), None
 
     model = SimpleNamespace(transcribe=fake_transcribe)
-    adapter = LocalSTTAdapter(model_factory=lambda *args, **kwargs: model)
+    adapter = LocalSTTAdapter(model_factory=lambda *args, **kwargs: model, model_size="test-model")
 
     adapter.transcribe(b"wav", language_code="es-AR", language="es_MX")
     assert received_kwargs["language"] == "es"
@@ -503,7 +503,7 @@ def test_local_stt_rejects_conflicting_language_argument_names():
     model = SimpleNamespace(transcribe=lambda path, **kwargs: (iter([]), None))
     adapter = LocalSTTAdapter(
         model_factory=lambda *args, **kwargs: factory_calls.append((args, kwargs)) or model
-    )
+    , model_size="test-model")
 
     with pytest.raises(SETTServiceAdapterError) as excinfo:
         adapter.transcribe(b"wav", language_code="es-AR", language="en")
@@ -523,7 +523,7 @@ def test_local_stt_without_a_language_code_omits_the_argument():
         return iter([]), None
 
     model = SimpleNamespace(transcribe=fake_transcribe)
-    adapter = LocalSTTAdapter(model_factory=lambda *args, **kwargs: model)
+    adapter = LocalSTTAdapter(model_factory=lambda *args, **kwargs: model, model_size="test-model")
 
     adapter.transcribe(b"wav")
     assert "language" not in received_kwargs
@@ -537,7 +537,7 @@ def test_local_stt_preserves_cancellation_detected_after_provider_work():
         return iter([SimpleNamespace(text="too late")]), None
 
     model = SimpleNamespace(transcribe=cancelling_transcribe)
-    adapter = LocalSTTAdapter(model_factory=lambda *args, **kwargs: model)
+    adapter = LocalSTTAdapter(model_factory=lambda *args, **kwargs: model, model_size="test-model")
 
     with control, lifecycle_scope(control), pytest.raises(SETTCancelledError) as excinfo:
         adapter.transcribe(b"wav")
@@ -550,13 +550,13 @@ def test_local_stt_preserves_provider_timeout_errors():
         raise SETTTimeoutError("provider deadline elapsed")
 
     model = SimpleNamespace(transcribe=timing_out_transcribe)
-    adapter = LocalSTTAdapter(model_factory=lambda *args, **kwargs: model)
+    adapter = LocalSTTAdapter(model_factory=lambda *args, **kwargs: model, model_size="test-model")
 
     with pytest.raises(SETTTimeoutError, match="provider deadline elapsed"):
         adapter.transcribe(b"wav")
 
 
 def test_official_adapter_honors_precancel_before_http(fake_requests):
-    adapter = DeepgramSTTAdapter("key")
+    adapter = DeepgramSTTAdapter("key", model="test-model")
     assert_cancellation_preflight(lambda **kwargs: adapter.transcribe(b"wav", **kwargs))
     assert fake_requests.calls == []

@@ -21,6 +21,7 @@ from sett.core_ruler.adapter import (
     ConnectivityRequirement,
     adapter_call_scope,
     normalized_adapter_error,
+    required_model,
 )
 from sett.core_ruler.lifecycle import (
     pop_lifecycle_kwargs,
@@ -44,12 +45,14 @@ class OpenAIAdapter(LLMBase):
 
         llm = OpenAIAdapter(
             api_key="your-key",
-            model="gpt-4o"
+            model="<model identifier you chose>",
         )
         response = llm.complete("What is SETT?")
+
+    ``model`` is required. SETT ships no default model: the application
+    chooses one from the identifiers its provider account offers.
     """
 
-    DEFAULT_MODEL = "gpt-4o"
     DEFAULT_MAX_TOKENS = 1024
     DEFAULT_TEMPERATURE = 0.75
     DEFAULT_TIMEOUT_SECONDS = 60.0
@@ -57,17 +60,24 @@ class OpenAIAdapter(LLMBase):
     def __init__(
         self,
         api_key: str | None = None,
-        model: str = DEFAULT_MODEL,
-        max_tokens: int = DEFAULT_MAX_TOKENS,
-        temperature: float = DEFAULT_TEMPERATURE,
+        model: str | None = None,
+        max_tokens: int | None = None,
+        temperature: float | None = DEFAULT_TEMPERATURE,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+        *,
+        max_completion_tokens: int | None = None,
     ) -> None:
         """
         Args:
             api_key: OpenAI API key. Falls back to OPENAI_API_KEY env var.
-            model: The GPT model to use.
-            max_tokens: Maximum tokens in the response.
-            temperature: Sampling temperature (0.0 to 1.0).
+            model: The identifier of the model to use. Required; there
+                is no default.
+            max_tokens: Legacy token limit. Mutually exclusive with
+                max_completion_tokens. If neither is set, sends max_tokens=1024.
+            temperature: Sampling temperature (0.0 to 1.0). None omits it.
+            max_completion_tokens: Completion budget, including reasoning
+                tokens on models that use them. Select this explicitly when
+                required by the model; SETT does not infer model capabilities.
             timeout_seconds: This adapter's own default timeout, in effect
                 when no ambient run gives it a stricter one (see
                 ``lifecycle.AdapterLifecycle.effective_timeout``).
@@ -97,18 +107,28 @@ class OpenAIAdapter(LLMBase):
                 reason_code="adapter.credentials_missing",
             )
 
-        self._model = model
-        self._max_tokens = max_tokens
-        self._temperature = min(1.0, max(0.0, temperature))
+        self._model = required_model(
+            model,
+            error_type=SETTLLMAdapterError,
+            provider="openai",
+            adapter_name=type(self).__name__,
+        )
+        self._token_limits = self._token_arguments(
+            max_tokens, max_completion_tokens, operation="construct"
+        )
+        self._temperature = (
+            None if temperature is None else min(1.0, max(0.0, temperature))
+        )
         self._timeout_seconds = validate_duration_seconds(
             timeout_seconds, name="timeout_seconds"
         )
-        # Wrapped because whatever the SDK raises here is a failure of this
-        # adapter, and Convention #13 says a caller holding
-        # ``except SETTError`` should not have to also know the provider
-        # library's exception hierarchy to catch it.
+        # Translate SDK construction failures so callers can catch SETTError
+        # without depending on the provider's exception hierarchy.
         try:
-            self._client = self._openai.OpenAI(api_key=self._api_key)
+            # One adapter call sends one request: the SDK's automatic
+            # retries are off, and repeating a call is the application's
+            # decision through execute_with_resilience().
+            self._client = self._openai.OpenAI(api_key=self._api_key, max_retries=0)
         except (SETTCancelledError, SETTTimeoutError, SETTAdapterError):
             raise
         except Exception as error:
@@ -121,6 +141,43 @@ class OpenAIAdapter(LLMBase):
                 kind=AdapterErrorKind.CONFIGURATION,
                 reason_code="adapter.client_construction_failed",
             ) from error
+
+    def _token_arguments(
+        self, max_tokens: int | None, max_completion_tokens: int | None,
+        *, operation: str,
+    ) -> dict[str, int]:
+        if max_tokens is not None and max_completion_tokens is not None:
+            raise SETTLLMAdapterError(
+                "Choose either max_tokens or max_completion_tokens, not both.",
+                kind=AdapterErrorKind.CONFIGURATION,
+                provider="openai", adapter_name=type(self).__name__,
+                operation=operation, reason_code="adapter.configuration_invalid",
+            )
+        name = "max_completion_tokens" if max_completion_tokens is not None else "max_tokens"
+        value = max_completion_tokens if max_completion_tokens is not None else max_tokens
+        if value is None:
+            value = self.DEFAULT_MAX_TOKENS
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise SETTLLMAdapterError(
+                "The token limit must be a positive integer.",
+                kind=AdapterErrorKind.CONFIGURATION,
+                provider="openai", adapter_name=type(self).__name__,
+                operation=operation, reason_code="adapter.configuration_invalid",
+            )
+        return {name: value}
+
+    def _generation_arguments(self, kwargs: dict[str, Any], *, operation: str) -> dict[str, Any]:
+        if "max_tokens" in kwargs or "max_completion_tokens" in kwargs:
+            arguments = self._token_arguments(
+                kwargs.get("max_tokens"), kwargs.get("max_completion_tokens"),
+                operation=operation,
+            )
+        else:
+            arguments = dict(self._token_limits)
+        temperature = kwargs.get("temperature", self._temperature)
+        if temperature is not None:
+            arguments["temperature"] = temperature
+        return arguments
 
     @property
     def model_name(self) -> str:
@@ -150,8 +207,7 @@ class OpenAIAdapter(LLMBase):
             try:
                 resp = self._client.chat.completions.create(
                     model=self._model,
-                    max_tokens=kwargs.get("max_tokens", self._max_tokens),
-                    temperature=kwargs.get("temperature", self._temperature),
+                    **self._generation_arguments(kwargs, operation="complete"),
                     messages=[
                         {"role": "system", "content": system or "You are a helpful assistant."},
                         {"role": "user", "content": prompt},
@@ -195,8 +251,7 @@ class OpenAIAdapter(LLMBase):
             try:
                 resp = self._client.chat.completions.create(
                     model=self._model,
-                    max_tokens=kwargs.get("max_tokens", self._max_tokens),
-                    temperature=kwargs.get("temperature", self._temperature),
+                    **self._generation_arguments(kwargs, operation="chat"),
                     messages=full_messages,
                     timeout=lifecycle.effective_timeout(self._timeout_seconds),
                 )

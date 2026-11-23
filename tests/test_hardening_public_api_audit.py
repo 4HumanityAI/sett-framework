@@ -93,7 +93,7 @@ def test_other_data_carriers_are_not_touched_by_this_change():
     bpm is a real, finite int, so it is out of range but not mistyped.
     Documents the decision as a passing test, not just a comment.
 
-    BiometricReading's type/finiteness checks (F14, added later) are a
+    BiometricReading's type/finiteness checks (added later) are a
     narrower, separate guarantee: see test_biometric_reading_rejects_a
     _mistyped_vital_sign below.
     """
@@ -104,7 +104,7 @@ def test_other_data_carriers_are_not_touched_by_this_change():
 
 
 def test_biometric_reading_rejects_a_mistyped_vital_sign():
-    """F14 regression (defensive audit #2).
+    """Regression: a mistyped vital sign is rejected at construction.
 
     Before this fix, a mistyped vital sign (a string where a number was
     expected) constructed successfully and only failed later, with a
@@ -121,7 +121,7 @@ def test_biometric_reading_rejects_a_mistyped_vital_sign():
 
 
 def test_risk_profile_rejects_a_mistyped_pillar_instead_of_a_bare_typeerror():
-    """F15 regression (defensive audit #2).
+    """Regression: a mistyped pillar raises SETTValidationError.
 
     A string pillar value used to raise a bare TypeError from the `<=`
     comparison in __post_init__ rather than SETTValidationError, and
@@ -161,7 +161,7 @@ def test_private_memory_get_all_returns_defensive_copy():
 
 
 def test_private_memory_write_stores_a_copy_not_the_callers_reference():
-    """F09 regression (defensive audit #2).
+    """Regression: write() stores a copy, not the caller's reference.
 
     Before this fix, write() stored the caller's own object. Mutating it
     after write() returned, without calling write() again, silently
@@ -182,7 +182,7 @@ def test_private_memory_write_stores_a_copy_not_the_callers_reference():
 
 
 def test_private_memory_clear_is_recorded_in_history():
-    """F26 regression (defensive audit #2): clear() must not be silent."""
+    """Regression: clear() must not be silent."""
     mem = PrivateMemory(owner="test_agent")
     mem.write("data", {"value": 1})
 

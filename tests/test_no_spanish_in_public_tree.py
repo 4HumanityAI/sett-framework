@@ -4,17 +4,8 @@ Guard test: SETT is a general-purpose framework and its own source
 this scans the public tree for text that looks like Spanish and fails
 if it finds any that isn't on the explicit allowlist below.
 
-Motivated by two incidents found in the same review (2026-07-28): (1) a
-new test file (this session's `test_phrasing_expert.py` additions) had
-several Spanish docstrings/comments, an honest mistake from working
-across two projects (one bilingual, one English-only) in the same
-session; (2) a Spanish paragraph had been locally introduced into
-`sett/services_tts_stt/base.py`'s docstring at some point after v0.7.0's
-actual release, confirmed by comparing against the real published
-source, to never have existed there. Both were caught by manual review
-this time. This test exists so the next one is caught automatically,
-the same day it's introduced, instead of waiting for the next external
-review.
+The guard covers source, comments, docstrings and documentation so that
+English-language regressions are detected with the rest of the suite.
 
 Detection strategy: Spanish orthography uses accented vowels
 (áéíóúÁÉÍÓÚ), ñ/Ñ, and inverted punctuation (¿¡) far more often than
@@ -34,10 +25,8 @@ False positives this test knows about and explicitly allows, each with
 its own reason (see `_ALLOWED_SNIPPETS`): the framework author's own
 name (a real name is not a language issue), the project's own
 multi-language paper links (each language named in its own script:
-"English, Español, 日本語", a deliberate list rather than prose), a single
-Spanish word used as a necessary illustrative example in
-`test_no_internal_project_names.py` (explaining a false-positive edge
-case for that OTHER guard test), an example surname in a demo script,
+"English, Español, 日本語", a deliberate list rather than prose), an
+example surname in a demo script,
 and one historical CHANGELOG entry that quotes, for the record, a
 Spanish word that was already found and fixed in an earlier version
 (quoting the mistake to document the fix is not repeating it).
@@ -84,11 +73,6 @@ _ALLOWED_SNIPPETS = (
     # named in its own script in a deliberate list ("English, Español,
     # 日本語"), never translated to "Spanish" mid-list.
     "Español",
-    # Necessary illustrative example in test_no_internal_project_names.py:
-    # a real word that happens to end in the same letters as a forbidden
-    # name, used to explain why whole-token hashing (not substring
-    # matching) is required there. Not prose.
-    "recaída",
     # Example surname in a demo scenario (examples/multi_agent.py), a
     # name, not a language choice.
     "García",
@@ -174,7 +158,6 @@ def test_pattern_catches_real_spanish_sentences(text: str) -> None:
         "This is a normal English sentence.",
         "Author: Eduardo Daniel Viñales",
         "Available in English, Español, 日本語.",
-        'the word "recaída" is a necessary example',
         "Doctor appointment: Dr. García",
         'a leftover Spanish word ("almacén scenario")',
     ],

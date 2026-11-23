@@ -44,10 +44,9 @@ class MyExpert(SETTExpert):
         # 2. TODO: do this expert's specific calculation/logic
         # result = my_logic(value)
 
-        # 3. (optional) if another expert in this same agent will need
-        #    this data later, write it to private memory. Nobody
-        #    outside this agent can read it: not the orchestrator,
-        #    not other agents.
+        # 3. (optional) if another expert in this same agent needs this data,
+        # write it to private memory. Its privacy is a Python convention,
+        # not enforced access control.
         # if self._private_memory:
         #     self._private_memory.write("my_key", result)
 

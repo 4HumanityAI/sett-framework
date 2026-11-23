@@ -10,10 +10,16 @@ from sett.core_ruler.adapter import (
     CapabilitySupport,
     ConnectivityRequirement,
     adapter_call_scope,
+    required_model,
 )
 from sett.core_ruler.lifecycle import pop_lifecycle_kwargs, validate_duration_seconds
 from sett.exceptions import SETTServiceAdapterError
-from sett.services_tts_stt._http import checked_request, credential, require_requests
+from sett.services_tts_stt._http import (
+    checked_request,
+    credential,
+    require_requests,
+    validated_endpoint,
+)
 from sett.services_tts_stt._language import resolve_language_code
 from sett.services_tts_stt.base import TTSBase
 
@@ -30,7 +36,7 @@ class CartesiaTTSAdapter(TTSBase):
         voice_id: str,
         api_key: str | None = None,
         *,
-        model: str = "sonic-3",
+        model: str | None = None,
         api_version: str = "2026-03-01",
         endpoint: str = "https://api.cartesia.ai/tts/bytes",
         timeout_seconds: float = 60,
@@ -52,9 +58,16 @@ class CartesiaTTSAdapter(TTSBase):
                 adapter_name=type(self).__name__,
                 reason_code="adapter.voice_id_missing",
             )
-        self._model = model.strip() or "sonic-3"
+        self._model = required_model(
+            model,
+            error_type=SETTServiceAdapterError,
+            provider="cartesia",
+            adapter_name=type(self).__name__,
+        )
         self._api_version = api_version
-        self._endpoint = endpoint
+        self._endpoint = validated_endpoint(
+            endpoint, provider="cartesia", adapter_name=type(self).__name__
+        )
         self._timeout_seconds = validate_duration_seconds(
             timeout_seconds, name="timeout_seconds"
         )

@@ -15,7 +15,7 @@ for the path this module defines: an expert following the "actions as
 data" pattern physically has no reference to the real client (Twilio,
 an email SDK, a payment API) and can only describe intent.
 
-Scope (F19, defensive audit #2): that guarantee covers effects
+Scope: that guarantee covers effects
 submitted as an Action through SETTExecutor. It does not, and cannot,
 prevent application code from performing a side effect directly in
 Python outside this path; propose_action() and any hand-written

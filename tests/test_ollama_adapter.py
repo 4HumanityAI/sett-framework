@@ -35,8 +35,8 @@ def _fake_response(payload: dict) -> MagicMock:
 class TestOllamaAdapterBasics:
 
     def test_default_model_name(self):
-        adapter = OllamaAdapter()
-        assert adapter.model_name == "qwen3:1.7b"
+        adapter = OllamaAdapter(model="test-model")
+        assert adapter.model_name == "test-model"
 
     def test_custom_model_name(self):
         adapter = OllamaAdapter(model="phi4-mini")
@@ -49,24 +49,24 @@ class TestOllamaAdapterBasics:
         assert "11434" in r
 
     def test_base_url_trailing_slash_is_stripped(self):
-        adapter = OllamaAdapter(base_url="http://localhost:11434/")
+        adapter = OllamaAdapter(base_url="http://localhost:11434/", model="test-model")
         assert adapter._base_url == "http://localhost:11434"
 
     def test_temperature_clamped_to_valid_range(self):
-        assert OllamaAdapter(temperature=5.0)._temperature == 1.0
-        assert OllamaAdapter(temperature=-1.0)._temperature == 0.0
+        assert OllamaAdapter(temperature=5.0, model="test-model")._temperature == 1.0
+        assert OllamaAdapter(temperature=-1.0, model="test-model")._temperature == 0.0
 
 
 class TestOllamaAdapterComplete:
 
-    @patch("urllib.request.urlopen")
+    @patch("sett.services_llm.ollama._open_request")
     def test_complete_returns_response_text(self, mock_urlopen):
         mock_urlopen.return_value = _fake_response({"response": "Hello, I am your assistant."})
-        adapter = OllamaAdapter()
+        adapter = OllamaAdapter(model="test-model")
         result = adapter.complete("Say good morning")
         assert result == "Hello, I am your assistant."
 
-    @patch("urllib.request.urlopen")
+    @patch("sett.services_llm.ollama._open_request")
     def test_complete_sends_correct_endpoint_and_model(self, mock_urlopen):
         mock_urlopen.return_value = _fake_response({"response": "ok"})
         adapter = OllamaAdapter(model="qwen3:1.7b")
@@ -80,55 +80,55 @@ class TestOllamaAdapterComplete:
         assert sent_body["prompt"] == "hello"
         assert sent_body["stream"] is False
 
-    @patch("urllib.request.urlopen")
+    @patch("sett.services_llm.ollama._open_request")
     def test_complete_includes_system_prompt_when_given(self, mock_urlopen):
         mock_urlopen.return_value = _fake_response({"response": "ok"})
-        adapter = OllamaAdapter()
+        adapter = OllamaAdapter(model="test-model")
         adapter.complete("hello", system="You are a warm assistant.")
 
         sent_body = json.loads(mock_urlopen.call_args[0][0].data.decode("utf-8"))
         assert sent_body["system"] == "You are a warm assistant."
 
-    @patch("urllib.request.urlopen")
+    @patch("sett.services_llm.ollama._open_request")
     def test_complete_omits_system_key_when_not_given(self, mock_urlopen):
         mock_urlopen.return_value = _fake_response({"response": "ok"})
-        adapter = OllamaAdapter()
+        adapter = OllamaAdapter(model="test-model")
         adapter.complete("hello")
 
         sent_body = json.loads(mock_urlopen.call_args[0][0].data.decode("utf-8"))
         assert "system" not in sent_body
 
-    @patch("urllib.request.urlopen")
+    @patch("sett.services_llm.ollama._open_request")
     def test_complete_missing_response_key_returns_empty_string(self, mock_urlopen):
         mock_urlopen.return_value = _fake_response({})
-        adapter = OllamaAdapter()
+        adapter = OllamaAdapter(model="test-model")
         assert adapter.complete("hello") == ""
 
 
 class TestOllamaAdapterChat:
 
-    @patch("urllib.request.urlopen")
+    @patch("sett.services_llm.ollama._open_request")
     def test_chat_returns_message_content(self, mock_urlopen):
         mock_urlopen.return_value = _fake_response(
             {"message": {"role": "assistant", "content": "Good morning, Dan."}}
         )
-        adapter = OllamaAdapter()
+        adapter = OllamaAdapter(model="test-model")
         result = adapter.chat([{"role": "user", "content": "good morning"}])
         assert result == "Good morning, Dan."
 
-    @patch("urllib.request.urlopen")
+    @patch("sett.services_llm.ollama._open_request")
     def test_chat_sends_correct_endpoint(self, mock_urlopen):
         mock_urlopen.return_value = _fake_response({"message": {"content": "ok"}})
-        adapter = OllamaAdapter()
+        adapter = OllamaAdapter(model="test-model")
         adapter.chat([{"role": "user", "content": "hello"}])
 
         sent_request = mock_urlopen.call_args[0][0]
         assert sent_request.full_url == "http://localhost:11434/api/chat"
 
-    @patch("urllib.request.urlopen")
+    @patch("sett.services_llm.ollama._open_request")
     def test_chat_prepends_system_message(self, mock_urlopen):
         mock_urlopen.return_value = _fake_response({"message": {"content": "ok"}})
-        adapter = OllamaAdapter()
+        adapter = OllamaAdapter(model="test-model")
         adapter.chat(
             [{"role": "user", "content": "hello"}],
             system="Sos tu asistente.",
@@ -138,10 +138,10 @@ class TestOllamaAdapterChat:
         assert sent_body["messages"][0] == {"role": "system", "content": "Sos tu asistente."}
         assert sent_body["messages"][1] == {"role": "user", "content": "hello"}
 
-    @patch("urllib.request.urlopen")
+    @patch("sett.services_llm.ollama._open_request")
     def test_chat_without_system_does_not_prepend(self, mock_urlopen):
         mock_urlopen.return_value = _fake_response({"message": {"content": "ok"}})
-        adapter = OllamaAdapter()
+        adapter = OllamaAdapter(model="test-model")
         adapter.chat([{"role": "user", "content": "hello"}])
 
         sent_body = json.loads(mock_urlopen.call_args[0][0].data.decode("utf-8"))
@@ -151,15 +151,15 @@ class TestOllamaAdapterChat:
 
 class TestOllamaAdapterErrorHandling:
 
-    @patch("urllib.request.urlopen")
+    @patch("sett.services_llm.ollama._open_request")
     def test_connection_error_raises_sett_llm_adapter_error(self, mock_urlopen):
         mock_urlopen.side_effect = urllib.error.URLError("Connection refused")
-        adapter = OllamaAdapter()
+        adapter = OllamaAdapter(model="test-model")
         with pytest.raises(SETTLLMAdapterError) as exc_info:
             adapter.complete("hello")
         assert "Ollama" in str(exc_info.value)
 
-    @patch("urllib.request.urlopen")
+    @patch("sett.services_llm.ollama._open_request")
     def test_malformed_json_raises_sett_llm_adapter_error(self, mock_urlopen):
         mock_resp = MagicMock()
         mock_resp.read.return_value = b"not valid json{{{"
@@ -167,7 +167,7 @@ class TestOllamaAdapterErrorHandling:
         mock_resp.__exit__.return_value = False
         mock_urlopen.return_value = mock_resp
 
-        adapter = OllamaAdapter()
+        adapter = OllamaAdapter(model="test-model")
         with pytest.raises(SETTLLMAdapterError):
             adapter.complete("hello")
 
@@ -177,9 +177,9 @@ class TestOllamaAdapterErrorHandling:
         consistent with the other adapters: not urllib-specific
         exceptions, which would leak an implementation detail.
         """
-        with patch("urllib.request.urlopen") as mock_urlopen:
+        with patch("sett.services_llm.ollama._open_request") as mock_urlopen:
             mock_urlopen.side_effect = urllib.error.URLError("down")
-            adapter = OllamaAdapter()
+            adapter = OllamaAdapter(model="test-model")
             try:
                 adapter.complete("hello")
                 assert False, "should have raised"
@@ -191,7 +191,7 @@ class TestOllamaAdapterErrorHandling:
 
 class TestOllamaAdapterBaseUrlValidation:
     """
-    AUD4-ROB-02: a wrong base_url used to surface as a bare ValueError
+    A wrong base_url used to surface as a bare ValueError
     from urllib on the first completion, walking straight through the
     SETTLLMAdapterError protection every caller relies on. It is a
     configuration mistake, so it is refused at construction.
@@ -212,7 +212,7 @@ class TestOllamaAdapterBaseUrlValidation:
     )
     def test_invalid_base_url_is_refused_at_construction(self, base_url):
         with pytest.raises(SETTLLMAdapterError) as exc_info:
-            OllamaAdapter(base_url=base_url)
+            OllamaAdapter(base_url=base_url, model="test-model")
         assert "base_url" in str(exc_info.value)
 
     @pytest.mark.parametrize(
@@ -227,12 +227,12 @@ class TestOllamaAdapterBaseUrlValidation:
         ],
     )
     def test_valid_base_url_is_accepted(self, base_url, expected):
-        assert OllamaAdapter(base_url=base_url)._base_url == expected
+        assert OllamaAdapter(base_url=base_url, model="test-model")._base_url == expected
 
     def test_construction_failure_happens_before_any_request(self):
-        with patch("urllib.request.urlopen") as mock_urlopen:
+        with patch("sett.services_llm.ollama._open_request") as mock_urlopen:
             with pytest.raises(SETTLLMAdapterError):
-                OllamaAdapter(base_url="not-a-url")
+                OllamaAdapter(base_url="not-a-url", model="test-model")
             mock_urlopen.assert_not_called()
 
 
@@ -251,7 +251,7 @@ class TestOllamaAdapterTranslatesEveryFailure:
         (it has a scheme and a host) and would have escaped the three
         named clauses.
         """
-        adapter = OllamaAdapter(base_url="http://local host:11434")
+        adapter = OllamaAdapter(base_url="http://local host:11434", model="test-model")
         with pytest.raises(SETTLLMAdapterError):
             adapter.complete("hello")
 
@@ -265,18 +265,18 @@ class TestOllamaAdapterTranslatesEveryFailure:
         ],
     )
     def test_unenumerated_failures_become_adapter_errors(self, raised):
-        with patch("urllib.request.urlopen") as mock_urlopen:
+        with patch("sett.services_llm.ollama._open_request") as mock_urlopen:
             mock_urlopen.side_effect = raised
-            adapter = OllamaAdapter()
+            adapter = OllamaAdapter(model="test-model")
             with pytest.raises(SETTLLMAdapterError) as exc_info:
                 adapter.complete("hello")
         assert exc_info.value.__cause__ is raised
 
     @pytest.mark.parametrize("method", ["complete", "chat"])
     def test_both_entry_points_translate(self, method):
-        with patch("urllib.request.urlopen") as mock_urlopen:
+        with patch("sett.services_llm.ollama._open_request") as mock_urlopen:
             mock_urlopen.side_effect = RuntimeError("nope")
-            adapter = OllamaAdapter()
+            adapter = OllamaAdapter(model="test-model")
             with pytest.raises(SETTLLMAdapterError):
                 if method == "complete":
                     adapter.complete("hello")
@@ -293,16 +293,16 @@ class TestOllamaAdapterTranslatesEveryFailure:
         "the provider failed": a caller distinguishing cancellation from
         failure would silently lose that distinction.
         """
-        with patch("urllib.request.urlopen") as mock_urlopen:
+        with patch("sett.services_llm.ollama._open_request") as mock_urlopen:
             mock_urlopen.side_effect = lifecycle_error
-            adapter = OllamaAdapter()
+            adapter = OllamaAdapter(model="test-model")
             with pytest.raises(type(lifecycle_error)):
                 adapter.complete("hello")
 
 
 class TestPhrasingExpertProtectionHolds:
     """
-    The effect AUD4-ROB-02 actually reported: the fallback that keeps a
+    The effect the audit actually reported: the fallback that keeps a
     component answering with no model reachable was being bypassed.
     """
 
@@ -319,9 +319,9 @@ class TestPhrasingExpertProtectionHolds:
             def fallback_text(self, facts, context):
                 return "Good morning."
 
-        with patch("urllib.request.urlopen") as mock_urlopen:
+        with patch("sett.services_llm.ollama._open_request") as mock_urlopen:
             mock_urlopen.side_effect = ValueError("unknown url type")
-            expert = Demo(name="demo", llm=OllamaAdapter())
+            expert = Demo(name="demo", llm=OllamaAdapter(model="test-model"))
             result = expert.resolve({})
 
         assert result["greeting"] == "Good morning."

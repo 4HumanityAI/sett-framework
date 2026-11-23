@@ -719,7 +719,7 @@ def test_cancelling_one_concurrent_run_does_not_touch_the_others():
 
 # ── Process-level signals must propagate, not become a result ──────────────
 #
-# D-01 / F04 regression (both audits): KeyboardInterrupt, SystemExit and
+# Regression found by two audits: KeyboardInterrupt, SystemExit and
 # GeneratorExit are not "the run failed"; they mean the process itself is
 # being interrupted or torn down. Before this fix, the broad
 # `except BaseException` blocks that turn a stopped or failed controlled
@@ -797,8 +797,8 @@ def test_a_controlled_run_still_releases_its_control_after_an_interrupt():
 
 
 # ---------------------------------------------------------------------------
-# Duplicate registration and identifier validation (F05/F06/F07/F08/F21,
-# defensive audit #2): a second registration under a name/action_type that
+# Duplicate registration and identifier validation:
+# a second registration under a name/action_type that
 # already has one used to silently overwrite it across handlers, experts,
 # and context analyzers, with no signal that anything was lost. The one
 # documented, tested exception is SETTOrchestrator.register_agent()'s

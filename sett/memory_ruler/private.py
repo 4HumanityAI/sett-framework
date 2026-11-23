@@ -7,7 +7,7 @@ By design, only the agent's own experts are given a reference to it
 The orchestrator is never handed one.
 
 This is a design and API-surface convention, not a runtime
-access-control boundary (F24, defensive audit #2): PrivateMemory has
+access-control boundary: PrivateMemory has
 no capability/ACL enforcement, and any code that does obtain a
 reference to an instance, e.g. by holding onto the agent object,
 can call its methods directly. Nothing in this module can stop that;
@@ -18,8 +18,8 @@ docs/SETT_Conventions.md for the fuller rationale.
 The word "private" describes this position in the architecture. It is not
 a storage property. When a memory_id is configured, mutations are
 persisted as strict JSON into the same backend as every other durable
-record, with no separate file, no separate permissions, and no encryption
-(M-02, defensive and infrastructure audit of v0.14.0). Protecting those
+record, with no separate file, no separate permissions, and no encryption.
+Protecting those
 bytes on disk is the deploying application's responsibility; see
 docs/security_model.md.
 
@@ -72,9 +72,7 @@ class PrivateMemory:
     These rules describe how the documented API is shaped, not a
     runtime capability check: there is no ACL here, so code that
     obtains a reference by some other means is not stopped by this
-    class (F24, defensive audit #2).
-
-    Inspired by an early prototype's memory.py: simplified and made agent-specific.
+    class.
     """
 
     def __init__(self, owner: str, *, memory_id: str | None = None) -> None:

@@ -12,10 +12,6 @@ under the same domain name; nothing else in your system needs to
 change, because callers only ever depend on the domain string, never
 on which concrete agent answers it.
 
-Extracted from a companion-assistant application built on top of SETT: first used to
-let a router and a multi-domain synthesizer be built and fully tested
-before any of the six domains they route to had a real implementation.
-
 Usage:
     orchestrator.register_agent(StubDomainAgent("health"))
     orchestrator.register_agent(StubDomainAgent("shopping"))

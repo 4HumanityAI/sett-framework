@@ -2,7 +2,7 @@
 SETT Framework: Tests: PhrasingExpert
 ======================================================
 Tests for the base class that formalizes the "LLM only phrases,
-never invents" pattern found independently twice in an early prototype.
+never invents" pattern.
 """
 import pytest
 
@@ -217,15 +217,10 @@ class TestPhrasingExpertWithAgent:
 
 
 # ── verify_facts() (v0.10.0): the 4th, optional hook ─────────────────────
-# Motivated by two independent subclasses in a downstream project that
-# needed exactly this and ended up overriding resolve() wholesale to
-# get it; see the class docstring.
 
 class StrictGreetingExpert(PhrasingExpert):
     """Same as GreetingLikeExpert, but rejects any phrasing that
-    contradicts the real time_of_day, the same shape independently
-    needed by the two subclasses that motivated this hook (see the
-    class docstring)."""
+    contradicts the real time_of_day."""
 
     OUTPUT_KEY = "greeting"
 

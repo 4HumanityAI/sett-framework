@@ -38,10 +38,9 @@ class TTSBase(ABC):
     - synthesize(): text in, audio bytes out.
 
     Deliberately does NOT play audio, write files, or touch any UI:
-    that is an application-layer concern (see an early prototype's
-    recovered Speaker/Listener classes for why:
-    they mixed playback and UI updates into the adapter itself, which
-    is exactly the coupling this interface avoids). Returning raw
+    that is an application-layer concern, and mixing playback or UI
+    updates into the adapter is exactly the coupling this interface
+    avoids. Returning raw
     bytes keeps the adapter a pure function, testable without a
     speaker, a UI, or a filesystem.
 
@@ -115,10 +114,10 @@ class STTBase(ABC):
     - transcribe(): audio bytes in, text out.
 
     Deliberately does not own a microphone, a listening loop, or any
-    concurrency guard (the recovered Listener class's asyncio.Lock
-    against overlapping listens is real and worth keeping: but it is
-    orchestration, not transcription, so it belongs in the
-    application/Expert layer that calls this adapter, not inside it).
+    concurrency guard. A lock against overlapping listens is worth
+    having, but it is orchestration, not transcription, so it belongs in
+    the application or Expert layer that calls this adapter, not inside
+    it.
 
     Example (minimal implementation):
         class MySTTAdapter(STTBase):

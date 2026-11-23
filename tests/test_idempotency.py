@@ -105,7 +105,7 @@ def test_key_order_does_not_change_the_fingerprint():
 
 
 def test_a_non_json_safe_payload_fails_closed_instead_of_using_repr():
-    """M-05 regression (severe audit).
+    """Regression: a payload that is not JSON-safe fails closed.
 
     The old ``default=repr`` fallback was unstable in both directions: an
     object's default repr() embeds its memory address (the same logical
@@ -320,7 +320,7 @@ def test_policy_validation():
 
 
 def test_max_attempts_must_be_an_int_not_a_float_or_a_bool():
-    """M-02 regression (severe audit).
+    """Regression: max_attempts must be an int.
 
     max_attempts=2.5 used to pass validation (it is >= 1) and only fail
     later, inside the attempt loop's range(1, max_attempts + 1), with a
@@ -335,7 +335,7 @@ def test_max_attempts_must_be_an_int_not_a_float_or_a_bool():
 
 
 def test_backoff_fields_reject_nan_and_infinity():
-    """M-03 regression (severe audit)."""
+    """Regression: backoff fields reject NaN and infinity."""
     with pytest.raises(SETTValidationError):
         RetryPolicy(initial_backoff_seconds=float("nan"))
     with pytest.raises(SETTValidationError):
@@ -801,7 +801,7 @@ def current_handler_context_is_clear() -> bool:
 
 
 def test_the_lifecycle_policy_supplies_a_per_handler_timeout():
-    """H-03 regression: handler_timeouts must actually bound an attempt.
+    """Regression: handler_timeouts must actually bound an attempt.
 
     Before this fix, SETTExecutor never received the orchestrator's
     LifecyclePolicy at all, so ``handler_timeouts={"charge_payment": ...}``
@@ -858,7 +858,7 @@ def test_an_explicit_submit_controlled_timeout_overrides_the_policy():
 
 
 def test_a_cleanup_failure_during_submit_controlled_is_not_dropped():
-    """M-01 regression (severe audit): the state used to be built from
+    """Regression: the state used to be built from
     inside `with control`, before control.__exit__() had run cleanup at
     all, so control.cleanup_errors was necessarily empty at that point
     no matter what actually happened during unwinding, and a hook that

@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import unicodedata
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -29,19 +30,9 @@ _MAX_METADATA_KEYS = 32
 _MAX_METADATA_DEPTH = 8
 _MAX_METADATA_BYTES = 16 * 1024
 
-# The single, shared definition of "this attribute/metadata key looks like
-# a secret". Trace attributes (audit_ruler/trace.py) reuse this exact list
-# rather than keeping a second copy. F17 (defensive audit #2): the two
-# had already diverged, with trace.py's own list including "medical",
-# "health_record" and "biometric" that this one lacked.
-#
-# Fragments are matched against a *normalized* key, with separators
-# (underscore, hyphen, space) stripped, rather than the raw lowercased
-# key. A plain substring check misses common spelling variants of the
-# same sensitive field ("apiKey", "x-api-key", "api.key", "private/key")
-# simply because the separator characters differ from the one fragment
-# that was hard-coded, which is exactly what normalizing both sides
-# before comparing closes as a class, not one alias at a time.
+# Shared sensitive-key fragments, also used by audit_ruler/trace.py.
+# Match normalized keys so separator variants such as apiKey, x-api-key
+# and api.key receive the same treatment.
 SENSITIVE_KEY_FRAGMENTS: tuple[str, ...] = (
     "password",
     "passwd",
@@ -58,23 +49,19 @@ SENSITIVE_KEY_FRAGMENTS: tuple[str, ...] = (
     "biometric",
 )
 
-# Every character that is not a letter or a digit. An earlier version
-# listed the separators it knew about (space, underscore, hyphen), which
-# closed the aliases somebody thought of and left "api.key", "api/key",
-# "api:key" and "api|key" open, the same defect one layer down, since
-# the point of normalizing at all is that the separator must not matter.
-# Removing all of them makes the rule "letters and digits decide", which
-# has no list to keep up to date.
+# Remove every non-alphanumeric separator rather than maintaining a
+# list of spellings for each sensitive key.
 _SEPARATOR_PATTERN = re.compile(r"[^a-z0-9]+")
 
 
 def normalize_key_for_sensitivity_check(key: str) -> str:
-    """Lowercase ``key`` and strip separators, for sensitive-key matching."""
-    return _SEPARATOR_PATTERN.sub("", key.lower())
+    """Fold compatibility forms, case and accents before fragment matching."""
+    folded = unicodedata.normalize("NFKD", unicodedata.normalize("NFKC", key).casefold())
+    return _SEPARATOR_PATTERN.sub("", folded)
 
 
 def is_sensitive_key(key: str) -> bool:
-    """Whether ``key`` looks like it names a secret, under any spelling."""
+    """Heuristic fragment detection, not a content or homoglyph filter."""
     normalized = normalize_key_for_sensitivity_check(key)
     return any(fragment in normalized for fragment in SENSITIVE_KEY_FRAGMENTS)
 

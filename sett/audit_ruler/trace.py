@@ -41,21 +41,9 @@ if TYPE_CHECKING:
 _GENESIS_HASH = "0" * 64
 TraceExporter = Callable[[dict[str, Any]], None]
 
-# Which terminal kinds may close each instrumented start kind.
-#
-# Hoisted to module level in v0.12.0 for one specific reason: the set of
-# terminals that may close "trace.started" used to be written twice, once
-# here and once inline in the single-terminal check further down. Two
-# copies of a list that must agree is a list that eventually will not. Both
-# readers now derive from this one mapping, so adding a terminal cannot be
-# done for one check and forgotten for the other.
-#
-# v0.12.0 adds the cancelled/timed-out terminals at every level, the
-# partial terminal for pipelines, and the per-attempt pair used by the
-# controlled executor. Cancellation and deadline exhaustion get distinct
-# kinds everywhere rather than sharing one: a trace that cannot tell "the
-# user stopped this" from "this ran out of time" cannot answer the only
-# question anybody asks it afterwards.
+# Terminal kinds that may close each instrumented start boundary.
+# Pairing and single-terminal validation use this shared mapping.
+# Cancellation and timeout remain distinct from failure.
 _TERMINAL_BY_START: dict[str, frozenset[str]] = {
     "trace.started": frozenset(
         {
@@ -120,6 +108,7 @@ _TERMINAL_BY_START: dict[str, frozenset[str]] = {
     "handler.authorized": frozenset({"handler.started", "handler.blocked"}),
     "handler.started": frozenset(
         {
+            "handler.entry_blocked",
             "handler.completed",
             "handler.failed",
             "handler.cancelled",
@@ -151,10 +140,8 @@ _TERMINAL_METADATA_FALLBACK_REASON = "audit.terminal_metadata_rejected"
 TRACE_TERMINAL_KINDS: frozenset[str] = _TERMINAL_BY_START["trace.started"]
 """Kinds that close a whole trace. Derived, never written out twice."""
 
-# Lifecycle events that are not start/terminal pairs: they annotate a run
-# rather than opening or closing a boundary, so they are listed here for
-# discoverability and to keep the vocabulary in one place instead of being
-# spelled out as string literals at each emitting site.
+# Events that annotate a run without opening or closing a boundary.
+# Keep their names here with the paired event vocabulary.
 CANCEL_REQUESTED_KIND = "execution.cancel_requested"
 DEADLINE_EXCEEDED_KIND = "execution.deadline_exceeded"
 CLEANUP_STARTED_KIND = "execution.cleanup_started"
@@ -167,17 +154,16 @@ _DURABLE_ANCHOR_KINDS = frozenset(
         "private_memory.mutation_started",
         "private_memory.mutation_persisted",
         "handler.authorized",
+        "handler.checkpoint_passed",
+        "handler.checkpoint_blocked",
+        "handler.checkpoint_missed",
         "persistence.checkpoint_requested",
     }
 ).union(*(terminals for terminals in _TERMINAL_BY_START.values()))
 _MAX_ATTRIBUTE_KEYS = 32
 _MAX_ATTRIBUTE_DEPTH = 8
 _MAX_ATTRIBUTE_BYTES = 16 * 1024
-# F17 fix (defensive audit #2): this used to be a second, independently
-# maintained copy of execution_context.py's own sensitive-key list, and
-# the two had already diverged (this one had "medical"/"health_record"/
-# "biometric", the other did not). Sensitivity now has exactly one
-# definition, imported from there.
+# Reuse the execution-context definition of sensitive keys.
 
 
 def _freeze_value(value: Any, depth: int = 0) -> Any:
@@ -493,8 +479,10 @@ class RecoveryReport:
 
     @property
     def requires_reconciliation(self) -> bool:
-        """Whether any recovered trace still needs explicit reconciliation."""
-        return any(trace.requires_reconciliation for trace in self.traces)
+        """Whether chain integrity or a recovered trace needs reconciliation."""
+        return not self.chain_integrity or any(
+            trace.requires_reconciliation for trace in self.traces
+        )
 
 
 def _verify_chain_integrity(
@@ -768,17 +756,17 @@ def _open_boundaries(events: tuple[TraceEvent, ...]) -> tuple[UnresolvedBoundary
         for terminal in terminals
     }
     for event in events:
+        # An event can end one boundary and start the next (``handler.started``
+        # ends ``handler.authorized``); it closes the first before opening its own.
+        start_kind = terminal_owner.get(event.kind)
+        if start_kind is not None:
+            pending = open_by_run_and_kind.get((event.run_id, start_kind))
+            if pending:
+                pending.pop(0)
         if event.kind in _TERMINAL_BY_START:
             open_by_run_and_kind.setdefault((event.run_id, event.kind), []).append(
                 event
             )
-            continue
-        start_kind = terminal_owner.get(event.kind)
-        if start_kind is None:
-            continue
-        pending = open_by_run_and_kind.get((event.run_id, start_kind))
-        if pending:
-            pending.pop(0)
     boundaries = tuple(
         UnresolvedBoundary(
             start_event_id=event.event_id,
@@ -1153,7 +1141,10 @@ class TraceRecorder:
             raise SETTConfigurationError(
                 "Durable evidence requires an explicit namespace_id."
             )
-        if evidence_durability is None or evidence_durability is DurabilityLevel.UNKNOWN:
+        if (
+            not isinstance(evidence_durability, DurabilityLevel)
+            or evidence_durability is DurabilityLevel.UNKNOWN
+        ):
             raise SETTConfigurationError(
                 "Durable evidence requires an explicit evidence_durability."
             )
@@ -1187,7 +1178,10 @@ class TraceRecorder:
             raise SETTConfigurationError(
                 "Evidence recovery requires an explicit namespace_id."
             )
-        if evidence_durability is DurabilityLevel.UNKNOWN:
+        if (
+            not isinstance(evidence_durability, DurabilityLevel)
+            or evidence_durability is DurabilityLevel.UNKNOWN
+        ):
             raise SETTConfigurationError(
                 "Evidence recovery requires an explicit evidence_durability."
             )
@@ -1324,7 +1318,8 @@ class TraceRecorder:
             )
         declaration = evidence_stream.durability()
         if (
-            evidence_durability is DurabilityLevel.UNKNOWN
+            not isinstance(evidence_durability, DurabilityLevel)
+            or evidence_durability is DurabilityLevel.UNKNOWN
             or not satisfies_durability(
                 declaration.maximum_durability, evidence_durability
             )
@@ -1620,8 +1615,8 @@ class TraceRecorder:
         Verify this recorder's hash chain and structural integrity.
 
         The chain is global, over every event this recorder has ever
-        recorded; there is no separate chain per trace_id (F28,
-        defensive audit #2). Passing ``trace_id`` only adds a
+        recorded; there is no separate chain per trace_id.
+        Passing ``trace_id`` only adds a
         precondition, "at least one event with this trace_id exists";
         it does not scope verification to that trace alone. Corruption
         in any event, in any trace, makes ``verify(trace_id=...)``

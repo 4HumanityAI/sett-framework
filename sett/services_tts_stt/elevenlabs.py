@@ -13,18 +13,16 @@ Talks to ElevenLabs' REST API directly via `requests`: no ElevenLabs
 SDK dependency, same reasoning as OllamaAdapter using only stdlib for
 Ollama's local API (services_llm/ollama.py).
 
-Ported from an ElevenLabs patch archived alongside a downstream
-consumer application's legacy prototypes (originally one engine among
-several in a multi-engine tts.py dispatcher). Only the ElevenLabs HTTP
-call is carried over: engine selection, local playback, and
-output-file pruning were application-layer concerns in that script and
-do not belong in a stateless adapter.
+It makes only the ElevenLabs HTTP call: engine selection, local
+playback and output-file pruning are application-layer concerns and do
+not belong in a stateless adapter.
 
 Requires, from a source checkout: pip install -e ".[elevenlabs]"
 """
 from __future__ import annotations
 
 import os
+import re
 from typing import Any
 
 from sett.core_ruler.adapter import (
@@ -35,6 +33,7 @@ from sett.core_ruler.adapter import (
     ConnectivityRequirement,
     adapter_call_scope,
     normalized_adapter_error,
+    required_model,
 )
 from sett.core_ruler.lifecycle import (
     pop_lifecycle_kwargs,
@@ -44,12 +43,17 @@ from sett.exceptions import (
     DEFAULT_PROVIDER_ERROR_MAX_LENGTH,
     SETTServiceAdapterError,
 )
+from sett.services_tts_stt._http import path_identifier
 from sett.services_tts_stt.base import TTSBase
 
 try:
     import requests
 except ImportError:
     requests = None
+
+# ElevenLabs names its MP3 formats mp3_<sample rate>_<bitrate>. The pattern
+# accepts the family without listing values: availability is the provider's.
+_MP3_FORMAT = re.compile(r"mp3_[0-9]+_[0-9]+")
 
 
 class ElevenLabsTTSAdapter(TTSBase):
@@ -59,12 +63,14 @@ class ElevenLabsTTSAdapter(TTSBase):
     Usage:
         from sett.services_tts_stt.elevenlabs import ElevenLabsTTSAdapter
 
-        tts = ElevenLabsTTSAdapter(api_key="your-key")
+        tts = ElevenLabsTTSAdapter(
+            api_key="your-key",
+            model_id="<model identifier you chose>",
+        )
         audio_bytes = tts.synthesize("Hi, how can I help you?")
     """
 
     DEFAULT_VOICE_ID = "21m00Tcm4TlvDq8ikWAM"
-    DEFAULT_MODEL_ID = "eleven_multilingual_v2"
     DEFAULT_STABILITY = 0.5
     DEFAULT_SIMILARITY_BOOST = 0.75
     DEFAULT_STYLE = 0.35
@@ -74,22 +80,33 @@ class ElevenLabsTTSAdapter(TTSBase):
         self,
         api_key: str | None = None,
         voice_id: str = DEFAULT_VOICE_ID,
-        model_id: str = DEFAULT_MODEL_ID,
+        model_id: str | None = None,
         stability: float = DEFAULT_STABILITY,
         similarity_boost: float = DEFAULT_SIMILARITY_BOOST,
         style: float = DEFAULT_STYLE,
         timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+        output_format: str | None = None,
     ) -> None:
         """
         Args:
             api_key: ElevenLabs API key. Falls back to the
                 ELEVENLABS_API_KEY environment variable.
             voice_id: ElevenLabs voice ID. Defaults to a stock voice.
-            model_id: ElevenLabs model ID.
+            model_id: ElevenLabs model ID. Required; there is no
+                default.
             stability: Voice stability (0.0 to 1.0).
             similarity_boost: Voice similarity boost (0.0 to 1.0).
             style: Style exaggeration (0.0 to 1.0).
             timeout_seconds: HTTP request timeout.
+            output_format: An ElevenLabs MP3 format identifier, such as
+                ``mp3_44100_128``, sent as the provider's ``output_format``
+                query parameter. Only MP3-family identifiers
+                (``mp3_<sample rate>_<bitrate>``) are accepted, so the
+                adapter's ``mp3`` container and ``audio/mpeg`` capability
+                stay true. ``None`` sends no parameter and leaves the
+                request as it was; the provider then uses its own default.
+                Which identifiers an account may use is the provider's
+                rule, not SETT's.
         """
         if requests is None:
             raise SETTServiceAdapterError(
@@ -102,11 +119,8 @@ class ElevenLabsTTSAdapter(TTSBase):
                 reason_code="adapter.dependency_missing",
             )
 
-        # The strip() covers the whole expression, not just the environment
-        # lookup: an explicitly passed "   " is truthy, so binding it to
-        # os.getenv() alone let a whitespace-only key through the guard
-        # below and fail later as a provider 401 instead of here as the
-        # configuration error it is. Same shape as the three LLM adapters.
+        # Strip both explicit and environment-sourced credentials so whitespace
+        # is rejected locally as configuration, before a provider request.
         self._api_key = (api_key or os.getenv("ELEVENLABS_API_KEY", "")).strip()
         if not self._api_key:
             raise SETTServiceAdapterError(
@@ -118,14 +132,38 @@ class ElevenLabsTTSAdapter(TTSBase):
                 reason_code="adapter.credentials_missing",
             )
 
-        self._voice_id = voice_id
-        self._model_id = model_id
+        self._voice_id = path_identifier(
+            voice_id,
+            provider="elevenlabs",
+            adapter_name=type(self).__name__,
+            parameter="voice_id",
+        )
+        self._model_id = required_model(
+            model_id,
+            error_type=SETTServiceAdapterError,
+            provider="elevenlabs",
+            adapter_name=type(self).__name__,
+            parameter="model_id",
+        )
         self._stability = min(1.0, max(0.0, stability))
         self._similarity_boost = min(1.0, max(0.0, similarity_boost))
         self._style = min(1.0, max(0.0, style))
         self._timeout_seconds = validate_duration_seconds(
             timeout_seconds, name="timeout_seconds"
         )
+        if output_format is not None and (
+            not isinstance(output_format, str)
+            or _MP3_FORMAT.fullmatch(output_format) is None
+        ):
+            raise SETTServiceAdapterError(
+                "ElevenLabs output_format must be an MP3 format identifier "
+                "such as 'mp3_44100_128', or None.",
+                kind=AdapterErrorKind.CONFIGURATION,
+                provider="elevenlabs",
+                adapter_name=type(self).__name__,
+                reason_code="adapter.output_format_invalid",
+            )
+        self._output_format = output_format
 
     @property
     def audio_format(self) -> str:
@@ -151,7 +189,15 @@ class ElevenLabsTTSAdapter(TTSBase):
         with adapter_call_scope(self, "synthesize"):
             lifecycle = pop_lifecycle_kwargs(kwargs)
             lifecycle.throw_if_cancelled()
-            voice_id = kwargs.get("voice_id", self._voice_id)
+            # Checked before the URL exists: a per-call identifier must
+            # not be able to change the path, add a query or override the
+            # configured output format.
+            voice_id = path_identifier(
+                kwargs.get("voice_id", self._voice_id),
+                provider="elevenlabs",
+                adapter_name=type(self).__name__,
+                parameter="voice_id",
+            )
             url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
             headers = {
                 "accept": "audio/mpeg",
@@ -171,12 +217,19 @@ class ElevenLabsTTSAdapter(TTSBase):
                 },
             }
 
+            # The format is fixed per instance, so the declared capability
+            # stays true; with no configured format the request is unchanged.
+            request_options: dict[str, Any] = {}
+            if self._output_format is not None:
+                request_options["params"] = {"output_format": self._output_format}
             try:
                 response = requests.post(
                     url,
+                    allow_redirects=False,
                     headers=headers,
                     json=payload,
                     timeout=lifecycle.effective_timeout(self._timeout_seconds),
+                    **request_options,
                 )
             except requests.exceptions.RequestException as error:
                 raise normalized_adapter_error(

@@ -1,10 +1,11 @@
 # Templates
 
-Starting point for creating your own agents, experts and adapters.
-Copy, rename, fill in the `TODO`s. All four templates are importable
-and instantiable as shipped. Agent and expert templates execute safe
-defaults; the adapter template fails closed until its provider call
-and result mapping are implemented.
+Starting point for creating your own agents, experts and adapters, and a
+conceptual consent model. Copy, rename, fill in the `TODO`s. All five
+templates are importable and instantiable as shipped. Agent and expert
+templates execute safe defaults; the adapter template fails closed until
+its provider call and result mapping are implemented; the consent model
+works as shipped, with its records in memory.
 
 ## Recommended order
 
@@ -32,6 +33,12 @@ LLM, speech, or sentiment provider). They implement independent
 provider contracts rather than Agent or Expert contracts, so adding
 one does not change the agent topology you just wrote.
 
+`consent_model.py` is also independent of the four steps, and optional.
+It is a conceptual model of how an application can check, before an
+action, that it holds a consent record: copy it and change it to fit your
+storage and legal basis, or write your own. Nothing in SETT requires it.
+See `docs/consent_model.md`.
+
 To remove an agent from the system: don't call `register_agent()`
 with it. There's nothing else to disconnect.
 
@@ -55,6 +62,7 @@ source (`pip install -e .`), so the checkout you install from is already
 the checkout that contains them - the access path is `templates/` in the
 source tree, and there is no second one to look for.
 
-`tests/test_adapter_template.py` and `tests/test_phrasing_expert_template.py`
-run against these files in every CI cell, so a template that stopped
-working would fail the build rather than fail in a user's copy.
+`tests/test_adapter_template.py`, `tests/test_phrasing_expert_template.py`
+and `tests/test_consent_model_template.py` run against these files in
+every CI cell, so a template that stopped working would fail the build
+rather than fail in a user's copy.

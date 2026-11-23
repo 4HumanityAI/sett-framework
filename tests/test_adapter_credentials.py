@@ -39,8 +39,7 @@ def _stub_modules(*names: str) -> dict[str, ModuleType]:
                 {
                     "Anthropic": MagicMock(),
                     "OpenAI": MagicMock(),
-                    "configure": MagicMock(),
-                    "GenerativeModel": MagicMock(),
+                    "Client": MagicMock(),
                 }
             )
             modules[partial] = module
@@ -52,34 +51,34 @@ def _stub_modules(*names: str) -> dict[str, ModuleType]:
 def _elevenlabs(**kwargs):
     from sett.services_tts_stt.elevenlabs import ElevenLabsTTSAdapter
 
-    return ElevenLabsTTSAdapter(**kwargs)
+    return ElevenLabsTTSAdapter(**{"model_id": "test-model", **kwargs})
 
 
 def _openai(**kwargs):
     with patch.dict(sys.modules, _stub_modules("openai")):
         from sett.services_llm.openai import OpenAIAdapter
 
-        return OpenAIAdapter(**kwargs)
+        return OpenAIAdapter(**{"model": "test-model", **kwargs})
 
 
 def _anthropic(**kwargs):
     with patch.dict(sys.modules, _stub_modules("anthropic")):
         from sett.services_llm.anthropic import AnthropicAdapter
 
-        return AnthropicAdapter(**kwargs)
+        return AnthropicAdapter(**{"model": "test-model", **kwargs})
 
 
 def _gemini(**kwargs):
-    with patch.dict(sys.modules, _stub_modules("google.generativeai")):
+    with patch.dict(sys.modules, _stub_modules("google.genai")):
         from sett.services_llm.gemini import GeminiAdapter
 
-        return GeminiAdapter(**kwargs)
+        return GeminiAdapter(**{"model": "test-model", **kwargs})
 
 
 def _deepgram(**kwargs):
     from sett.services_tts_stt.deepgram import DeepgramSTTAdapter
 
-    return DeepgramSTTAdapter(**kwargs)
+    return DeepgramSTTAdapter(**{"model": "test-model", **kwargs})
 
 
 def _azure_stt(**kwargs):
@@ -109,13 +108,13 @@ def _gladia(**kwargs):
 def _whisper(**kwargs):
     from sett.services_tts_stt.openai_audio import WhisperSTTAdapter
 
-    return WhisperSTTAdapter(**kwargs)
+    return WhisperSTTAdapter(**{"model": "test-model", **kwargs})
 
 
 def _cartesia(**kwargs):
     from sett.services_tts_stt.cartesia import CartesiaTTSAdapter
 
-    return CartesiaTTSAdapter(voice_id="test-voice", **kwargs)
+    return CartesiaTTSAdapter(voice_id="test-voice", **{"model": "test-model", **kwargs})
 
 
 # (label, constructor, environment variable it falls back to)
@@ -139,6 +138,7 @@ _IDS = [entry[0] for entry in KEYED_ADAPTERS]
 @pytest.fixture(autouse=True)
 def _no_ambient_keys(monkeypatch):
     """No adapter may quietly pass because the machine has a real key set."""
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     for _, _, env_var in KEYED_ADAPTERS:
         monkeypatch.delenv(env_var, raising=False)
 

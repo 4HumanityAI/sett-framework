@@ -11,6 +11,7 @@ from sett.core_ruler.adapter import (
     ConnectivityRequirement,
     adapter_call_scope,
     normalized_adapter_error,
+    required_model,
 )
 from sett.core_ruler.lifecycle import pop_lifecycle_kwargs, validate_duration_seconds
 from sett.exceptions import SETTServiceAdapterError
@@ -19,6 +20,7 @@ from sett.services_tts_stt._http import (
     credential,
     require_requests,
     response_json,
+    validated_endpoint,
 )
 from sett.services_tts_stt._language import resolve_language_code
 from sett.services_tts_stt.base import STTBase
@@ -35,7 +37,7 @@ class WhisperSTTAdapter(STTBase):
         self,
         api_key: str | None = None,
         *,
-        model: str = "whisper-1",
+        model: str | None = None,
         endpoint: str = "https://api.openai.com/v1/audio/transcriptions",
         timeout_seconds: float = 120,
     ) -> None:
@@ -47,8 +49,15 @@ class WhisperSTTAdapter(STTBase):
             provider="openai",
             adapter_name=type(self).__name__,
         )
-        self._model = model.strip() or "whisper-1"
-        self._endpoint = endpoint
+        self._model = required_model(
+            model,
+            error_type=SETTServiceAdapterError,
+            provider="openai",
+            adapter_name=type(self).__name__,
+        )
+        self._endpoint = validated_endpoint(
+            endpoint, provider="openai", adapter_name=type(self).__name__
+        )
         self._timeout_seconds = validate_duration_seconds(
             timeout_seconds, name="timeout_seconds"
         )

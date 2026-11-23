@@ -13,23 +13,23 @@ may have a completely different profile tomorrow.
 
 The three pillars (inspired by the SGR-IC concept and Beatless):
 
-  1. emotional_instability (0.0–1.0)
+  1. emotional_instability (0.0 to 1.0)
      How likely the user is to act irrationally, violently, or self-destructively
      under their current stress level. NOT a moral judgment: a contextual signal.
      Example: 0.9 = user is in acute emotional crisis.
 
-  2. influence_vulnerability (0.0–1.0)
+  2. influence_vulnerability (0.0 to 1.0)
      How susceptible the user is to external manipulation or social engineering
      in their current state. High vulnerability means their decisions may not
      fully reflect their own intentions: they may be being influenced.
      Example: 0.7 = user shows signs of distress-driven decision making.
 
-  3. collateral_damage_potential (0.0–1.0)
+  3. collateral_damage_potential (0.0 to 1.0)
      The potential impact of the user's decisions on their environment.
      Not about who they are, but about their current context:
-     are they alone? Do they have critical medication pending?
+     are they working alone? Do they have critical tasks pending?
      Are others depending on them right now?
-     Example: 0.8 = user is primary caregiver, decisions affect others directly.
+     Example: 0.8 = user coordinates a team, decisions affect others directly.
 
 Privacy note:
     RiskProfile values are stored exclusively in PrivateMemory.
@@ -118,12 +118,8 @@ class RiskProfile:
         for attr in ("emotional_instability", "influence_vulnerability",
                      "collateral_damage_potential"):
             value = getattr(self, attr)
-            # F15 fix (defensive audit #2): a mistyped pillar (a string,
-            # for instance) used to escape as a bare TypeError from the
-            # `<=` comparison below rather than the documented
-            # SETTValidationError, and `bool`, a real int subclass in
-            # Python, was silently accepted as 0.0/1.0 since
-            # `0.0 <= True <= 1.0` is simply True.
+            # Validate types before numeric comparison so invalid inputs raise
+            # SETTValidationError. Booleans are not risk scores.
             if not isinstance(value, (int, float)) or isinstance(value, bool):
                 raise SETTValidationError(
                     f"RiskProfile.{attr} must be a number, got "
@@ -140,7 +136,7 @@ class RiskProfile:
         self._validate_weights()
 
     def _validate_weights(self) -> None:
-        """F13 fix (defensive audit #2).
+        """Validate the pillar weights, then freeze them.
 
         ``_weights`` was an unvalidated, freely mutable dataclass field:
         custom weights that did not sum to 1.0, or a post-construction
@@ -191,7 +187,7 @@ class RiskProfile:
         framework (PrivateMemory.write(), UniversalMemory storage,
         ExecutionResult payloads). The default ``copy.deepcopy`` cannot
         handle a ``MappingProxyType`` on its own because it is not picklable,
-        so without this override, freezing ``_weights`` for F13 would
+        so without this override, freezing ``_weights`` would
         break every one of those call sites. Sharing the same proxy
         across copies is safe precisely because it is read-only: there is
         nothing a second reference could mutate.
@@ -225,12 +221,12 @@ class RiskProfile:
         This is a recommendation: the orchestrator makes the final decision.
 
         Score → Level:
-            0.00–0.15  → LEVEL_0 (Normal)
-            0.16–0.30  → LEVEL_1 (Attention)
-            0.31–0.50  → LEVEL_2 (Warning)
-            0.51–0.70  → LEVEL_3 (Danger)
-            0.71–0.85  → LEVEL_4 (Critical)
-            0.86–1.00  → LEVEL_5 (Emergency)
+            0.00 to 0.15  → LEVEL_0 (Normal)
+            0.16 to 0.30  → LEVEL_1 (Attention)
+            0.31 to 0.50  → LEVEL_2 (Warning)
+            0.51 to 0.70  → LEVEL_3 (Danger)
+            0.71 to 0.85  → LEVEL_4 (Critical)
+            0.86 to 1.00  → LEVEL_5 (Emergency)
         """
         score = self.composite_score
         if score <= 0.15:
@@ -272,12 +268,12 @@ class RiskProfile:
     def from_dict(cls, data: dict[str, Any]) -> RiskProfile:
         """Reconstruct a RiskProfile from a dict stored in PrivateMemory.
 
-        F12 fix (defensive audit #2): ``timestamp`` used to be dropped
+        Fix: ``timestamp`` used to be dropped
         here even though ``to_dict()`` always serializes it, so every
         roundtrip through PrivateMemory silently replaced the moment this
         assessment was actually made with whatever moment it happened to
         be reconstructed, the same class of bug as
-        EnvironmentalContext.from_dict()'s own timestamp loss (F03).
+        EnvironmentalContext.from_dict()'s own timestamp loss.
         """
         kwargs: dict[str, Any] = {
             "emotional_instability": data["emotional_instability"],

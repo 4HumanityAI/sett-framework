@@ -14,7 +14,8 @@ describe intent as an Action and submit it here. The Executor:
        Layer 2 user / Layer 3 environment: the same three-layer system used
        everywhere else in SETT)
     4. When configured: resolves authority, obtains a policy grant, and
-       verifies and consumes its receipt
+       verifies and consumes its receipt; after the effect barrier, a
+       final gate checks that the grant did not go stale meanwhile
     5. If approved and authorized: invokes the handler for that action_type:
        this is the ONLY place the real side effect happens
     6. Returns the handler's result upward, so the Orchestrator (and from
@@ -35,6 +36,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Sequence
+from contextlib import nullcontext
 from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass, replace
@@ -44,6 +46,7 @@ from uuid import uuid4
 
 from sett.audit_ruler.chain import append_chained_entry, verify_chain
 from sett.authorization_ruler._validation import canonical_json_bytes
+from sett.authorization_ruler.authorizer import AuthorizationRuler
 from sett.authorization_ruler.contracts import AuthorizationRequestResolver
 from sett.authorization_ruler.models import (
     ApprovalInput,
@@ -51,7 +54,6 @@ from sett.authorization_ruler.models import (
     AuthorizationRequest,
     ExecutionMode,
 )
-from sett.authorization_ruler.ruler import AuthorizationRuler
 from sett.core_ruler.action import Action
 from sett.core_ruler.execution_context import (
     ExecutionContext,
@@ -85,6 +87,7 @@ from sett.core_ruler.resilience import (
     RetryPolicy,
     classify_error,
     is_retryable,
+    retry_delay_seconds,
 )
 from sett.exceptions import (
     SETTAuthorizationConfigurationError,
@@ -138,6 +141,20 @@ class HandlerContext:
         if self.cancellation_token is not None:
             self.cancellation_token.throw_if_cancelled()
 
+    def check_policy_conditions(self, checkpoint_id: str) -> None:
+        """Pass the next declared controlled checkpoint before the next segment.
+
+        Only the controlled handler of a governed submission can pass one,
+        in the order its action type declares them. It returns ``None`` when
+        the checkpoint passes and raises ``SETTAuthorizationError``
+        otherwise; once one fails, every later call fails too. What already
+        ran stays done.
+        """
+        checkpoints = _ACTIVE_POLICY_CHECKPOINTS.get()
+        if checkpoints is None or checkpoints.handler_context is not self:
+            raise _checkpoint_error("authorization.checkpoint_unavailable")
+        checkpoints.check(checkpoint_id)
+
 
 _ACTIVE_HANDLER_CONTEXT: ContextVar[HandlerContext | None] = ContextVar(
     "sett_handler_context", default=None
@@ -147,6 +164,135 @@ _ACTIVE_HANDLER_CONTEXT: ContextVar[HandlerContext | None] = ContextVar(
 def current_handler_context() -> HandlerContext | None:
     """The handler context for the attempt running in this thread, if any."""
     return _ACTIVE_HANDLER_CONTEXT.get()
+
+
+def _checkpoint_error(reason_code: str) -> SETTAuthorizationError:
+    return SETTAuthorizationError(
+        "The controlled checkpoint could not be passed.", reason_code=reason_code
+    )
+
+
+def _mark_blocked_segment(error: BaseException) -> None:
+    """Mark an error that left a handler after one of its checkpoints failed."""
+    try:
+        error._sett_checkpoint_blocked = True  # type: ignore[attr-defined]
+    except (AttributeError, TypeError):
+        pass
+
+
+class _PolicyCheckpoints:
+    """The declared controlled checkpoints of one governed handler invocation.
+
+    It lives only while the handler runs and keeps, in memory, what the
+    consumed grant verified. Nothing is written to the governance journal.
+    """
+
+    def __init__(
+        self,
+        executor: SETTExecutor,
+        handoff: Any,
+        *,
+        action: Action,
+        context: ExecutionContext | None,
+        cause_id: str | None,
+        handler_context: HandlerContext,
+    ) -> None:
+        self._executor = executor
+        self._handoff = handoff
+        self._action = action
+        self._context = context
+        self._cause_id = cause_id
+        self._verified = handoff.verified_conditions
+        self.handler_context = handler_context
+        self.declared: tuple[str, ...] = handoff.checkpoints
+        self.passed = 0
+        self.failed = False
+
+    def check(self, checkpoint_id: object) -> None:
+        """Pass the next declared checkpoint or raise; a failure is final."""
+        if self.failed:
+            error = _checkpoint_error("authorization.checkpoint_blocked")
+            self._record("handler.checkpoint_blocked", "blocked", checkpoint_id, error)
+            raise error
+        if self.passed >= len(self.declared) or checkpoint_id != self.declared[self.passed]:
+            self.failed = True
+            error = _checkpoint_error("authorization.checkpoint_invalid")
+            self._record("handler.checkpoint_blocked", "blocked", checkpoint_id, error)
+            raise error
+        ruler = self._executor._authorization_ruler
+        assert ruler is not None
+        try:
+            self._verified = ruler._check_controlled_checkpoint(
+                self._handoff, self.declared[self.passed], self._verified
+            )
+        except SETTAuthorizationError as error:
+            self.failed = True
+            self._record("handler.checkpoint_blocked", "blocked", checkpoint_id, error)
+            raise
+        try:
+            self._record("handler.checkpoint_passed", "passed", checkpoint_id, None)
+        except BaseException:
+            # Without its durable record the next segment must not run.
+            self.failed = True
+            raise
+        self.passed += 1
+
+    def record_missed(self) -> None:
+        """Record the declared checkpoints a handler returned without passing."""
+        recorder = self._executor._trace_recorder
+        if self.failed or self.passed >= len(self.declared):
+            return
+        if recorder is None or self._context is None:
+            return
+        recorder.record(
+            self._context,
+            kind="handler.checkpoint_missed",
+            component_type="handler",
+            component_name=self._action.action_type,
+            status="missed",
+            cause_id=self._cause_id,
+            attributes={
+                "action_id": self._action.action_id,
+                "missing_checkpoints": list(self.declared[self.passed:]),
+            },
+        )
+
+    def _record(
+        self, kind: str, status: str, checkpoint_id: object,
+        error: SETTAuthorizationError | None,
+    ) -> None:
+        recorder = self._executor._trace_recorder
+        if recorder is None or self._context is None:
+            return
+        attributes: dict[str, Any] = {"action_id": self._action.action_id}
+        if isinstance(checkpoint_id, str) and 0 < len(checkpoint_id) <= 128:
+            attributes["checkpoint_id"] = checkpoint_id
+        event = recorder.record(
+            self._context,
+            kind=kind,
+            component_type="handler",
+            component_name=self._action.action_type,
+            status=status,
+            cause_id=self._cause_id,
+            reason_codes=(error.reason_code,) if error is not None else (),
+            attributes=attributes,
+        )
+        if error is not None:
+            error.trace_event_id = event.event_id
+
+
+_ACTIVE_POLICY_CHECKPOINTS: ContextVar[_PolicyCheckpoints | None] = ContextVar(
+    "sett_policy_checkpoints", default=None
+)
+
+
+def _copy_action_payload(payload: Any) -> Any:
+    """Translate excessive nesting without exposing the recursive failure."""
+    try:
+        return deepcopy(payload)
+    except RecursionError:
+        pass
+    raise SETTValidationError("Action payload exceeds the supported nesting depth.")
 
 
 class SETTExecutor:
@@ -265,17 +411,30 @@ class SETTExecutor:
 
         Raises:
             SETTValidationError: If action_type is empty/whitespace, or
-                handler is not callable (F06, defensive audit #2:
-                register_controlled_handler() already validated this;
+                handler is not callable (register_controlled_handler()
+                already validated this;
                 the legacy method did not).
             SETTConfigurationError: If action_type already has a handler
-                registered, of either kind (F05/F07, defensive audit #2:
-                a silent overwrite here used to also let the two handler
+                registered, of either kind (a silent
+                overwrite here used to also let the two handler
                 maps drift out of sync with each other; see
                 register_controlled_handler()'s docstring).
         """
         self._register_handler_guard(action_type, handler)
+        if self._declared_checkpoints(action_type):
+            raise SETTConfigurationError(
+                f"Action type {action_type!r} declares controlled checkpoints, "
+                "which a plain handler cannot pass. Register it with "
+                "register_controlled_handler() instead."
+            )
         self._handlers[action_type] = handler
+
+    def _declared_checkpoints(self, action_type: str) -> tuple[str, ...]:
+        """The controlled checkpoints the authorization ruler declares for a type."""
+        ruler = self._authorization_ruler
+        if ruler is None:
+            return ()
+        return ruler._policy_ruler._controlled_checkpoints_for(action_type)
 
     def _register_handler_guard(
         self, action_type: str, handler: Callable[..., Any]
@@ -407,13 +566,17 @@ class SETTExecutor:
         context: ExecutionContext,
         cause_id: str | None,
         approval_inputs: Sequence[ApprovalInput],
-    ) -> Any:
-        """Resolve, issue, and consume authority immediately before effect."""
+    ) -> tuple[Any, Any]:
+        """Resolve, issue, and consume authority immediately before effect.
+
+        Returns the trace event and what the consumption checked, which the
+        final gate compares again after the effect barrier.
+        """
 
         ruler = self._authorization_ruler
         resolver = self._authorization_request_resolver
         if ruler is None or resolver is None:
-            return None
+            return None, None
         mode = (
             ExecutionMode.CONTROLLED
             if current_handler_context() is not None
@@ -424,7 +587,7 @@ class SETTExecutor:
                 action_id=action.action_id,
                 trace_id=context.trace_id,
                 action_type=action.action_type,
-                payload=deepcopy(approved_payload),
+                payload=_copy_action_payload(approved_payload),
                 execution_mode=mode,
                 idempotency_key=action.idempotency_key,
             )
@@ -467,13 +630,14 @@ class SETTExecutor:
                 raise SETTAuthorizationError(
                     "Authorization did not grant effect authority.",
                     reason_code=reason_code,
+                    verdict="deny" if outcome.decision.verdict.value == "deny" else "block",
                 )
             if not isinstance(receipt, AuthorizationReceipt):
                 raise SETTAuthorizationConfigurationError(
                     "Authorization grant did not carry a valid receipt.",
                     reason_code="authorization.receipt_invalid",
                 )
-            ruler.verify_and_consume(
+            handoff = ruler._consume_for_effect(
                 receipt,
                 request,
                 approval_inputs=approval_inputs,
@@ -500,7 +664,7 @@ class SETTExecutor:
             raise normalized from error
 
         if self._trace_recorder is None:
-            return None
+            return None, handoff
         return self._trace_recorder.record(
             context,
             kind="authorization.receipt_verified",
@@ -511,8 +675,50 @@ class SETTExecutor:
             attributes={
                 "action_id": action.action_id,
                 "receipt_id": receipt.receipt_id,
+                # The issuing attempt; its decision record is "decision.<id>".
+                "decision_ref": outcome.authorization_attempt_id,
             },
-        )
+        ), handoff
+
+    def _confirm_authorization_handoff(
+        self,
+        handoff: Any,
+        *,
+        action: Action,
+        context: ExecutionContext | None,
+        authorized_event: Any,
+        blocked_kind: str = "handler.blocked",
+    ) -> None:
+        """Run the final gate after the effect barrier and its exporters.
+
+        The exporters of the authorization and barrier records are
+        application code that ran after the receipt was consumed. If the
+        grant went stale meanwhile, the boundary is closed as blocked, the
+        receipt stays consumed, and the handler never runs.
+        """
+
+        ruler = self._authorization_ruler
+        assert ruler is not None
+        try:
+            ruler._confirm_effect_handoff(handoff)
+        except SETTAuthorizationError as error:
+            if context is not None and self._trace_recorder is not None:
+                blocked_event = self._trace_recorder.record(
+                    context,
+                    kind=blocked_kind,
+                    component_type="handler",
+                    component_name=action.action_type,
+                    status="blocked",
+                    cause_id=(
+                        authorized_event.event_id
+                        if authorized_event is not None
+                        else None
+                    ),
+                    reason_codes=(error.reason_code,),
+                    attributes={"action_id": action.action_id},
+                )
+                error.trace_event_id = blocked_event.event_id
+            raise
 
     def _record_action_proposed(
         self,
@@ -613,6 +819,64 @@ class SETTExecutor:
                 memory has no EthicalFilter, or no handler is registered for
                 this action type. Every configuration error fails closed.
         """
+        return self._submit_in_handler_context(
+            None,
+            action,
+            emotional_state,
+            risk_profile,
+            location_id,
+            execution_context=execution_context,
+            cause_id=cause_id,
+            approval_inputs=approval_inputs,
+        )
+
+    def _submit_in_handler_context(
+        self,
+        handler_context: HandlerContext | None,
+        action: Action,
+        emotional_state: str,
+        risk_profile: RiskProfile | None,
+        location_id: str,
+        *,
+        execution_context: ExecutionContext | None,
+        cause_id: str | None,
+        approval_inputs: Sequence[ApprovalInput],
+    ) -> Any:
+        """Run one submission with exactly the handler context it was given.
+
+        ``submit()`` passes ``None`` and ``submit_controlled()`` passes the
+        context of its own attempt. The context is set here, for this
+        submission only, and the previous one is restored on every exit. A
+        plain submission made from inside a controlled handler therefore
+        never sees the outer attempt's identity, and a controlled handler
+        reached through it fails closed as documented.
+        """
+        token = _ACTIVE_HANDLER_CONTEXT.set(handler_context)
+        try:
+            return self._submit(
+                action,
+                emotional_state,
+                risk_profile,
+                location_id,
+                execution_context=execution_context,
+                cause_id=cause_id,
+                approval_inputs=approval_inputs,
+            )
+        finally:
+            _ACTIVE_HANDLER_CONTEXT.reset(token)
+
+    def _submit(
+        self,
+        action: Action,
+        emotional_state: str,
+        risk_profile: RiskProfile | None,
+        location_id: str,
+        *,
+        execution_context: ExecutionContext | None,
+        cause_id: str | None,
+        approval_inputs: Sequence[ApprovalInput],
+    ) -> Any:
+        """The single audited submission path behind both public entry points."""
         configuration_error = self._execution_configuration_error(action)
         if configuration_error is not None:
             raise configuration_error
@@ -630,9 +894,9 @@ class SETTExecutor:
         # callable also keeps routing consistent if registration changes later.
         action_type = action.action_type
         handler = self._handlers.get(action_type)
-        if handler is not None and self.authorization_enabled:
+        if handler is not None:
             # Exporters and resolvers are application code. Keep the selected
-            # route and its authorization identity together even if a callback
+            # route and its evaluation identity together even if a callback
             # changes the caller's mutable Action. Payload copying still waits
             # until route preflight succeeds below.
             action = Action(
@@ -652,6 +916,15 @@ class SETTExecutor:
             if self.authorization_enabled
             else None
         )
+        # A caller-supplied root with no events is the action's own root.
+        # Deriving from it would introduce a parent absent from the journal.
+        if (
+            parent is not None
+            and parent.parent_id is None
+            and self._trace_recorder is not None
+            and self._trace_recorder.last_event_id(parent.run_id) is None
+        ):
+            action_context = parent
         proposed_event = self._record_action_proposed(
             action, action_context, trace_cause
         )
@@ -664,22 +937,10 @@ class SETTExecutor:
                 proposed_event,
             )
 
-        # One read of the caller's Action after the route is known to exist.
-        #
-        # The payload used to be read from the live object twice: once to
-        # build the filter's context and again to call the handler. Between
-        # those two reads another thread holding the same Action could
-        # change it, so policy approved one payload and the handler
-        # performed a different one, and the fingerprint recorded for
-        # idempotency belonged to the approved one, not the executed one.
-        #
-        # "The caller should not mutate it" is not an answer this framework
-        # accepts anywhere else: the guarantee that an expert cannot reach
-        # the real client is structural, not a rule people are asked to
-        # follow, and "what policy approved is what runs" has to be the
-        # same kind of guarantee. Reading once removes the second read
-        # there was a race against, so no lock is needed.
-        approved_payload = deepcopy(action.payload)
+        # Read the caller's payload once after route preflight. Policy evaluation
+        # and handler execution must use the same snapshot even if the caller
+        # later mutates the Action.
+        approved_payload = _copy_action_payload(action.payload)
 
         environmental_context = self._universal_memory.read_environmental_context(
             location_id
@@ -693,7 +954,7 @@ class SETTExecutor:
                     # A further copy of the snapshot, so an analyzer that
                     # mutates what it is handed cannot reach the payload
                     # the handler is about to receive.
-                    **deepcopy(approved_payload),
+                    **_copy_action_payload(approved_payload),
                     "_proposed_by": action.proposed_by,
                 },
                 emotional_state=emotional_state,
@@ -751,9 +1012,10 @@ class SETTExecutor:
                 attributes={"action_id": action.action_id},
             )
         authorization_event = None
+        authorization_handoff = None
         if self.authorization_enabled:
             assert action_context is not None
-            authorization_event = self._authorize_effect(
+            authorization_event, authorization_handoff = self._authorize_effect(
                 action=action,
                 approved_payload=approved_payload,
                 context=action_context,
@@ -800,6 +1062,13 @@ class SETTExecutor:
                 )
                 error.trace_event_id = blocked_event.event_id
                 raise
+        if authorization_handoff is not None:
+            self._confirm_authorization_handoff(
+                authorization_handoff,
+                action=action,
+                context=action_context,
+                authorized_event=authorized_event,
+            )
 
         logger.info(
             "[Executor] Executing approved action '%s' (proposed by '%s')",
@@ -820,22 +1089,37 @@ class SETTExecutor:
                 ),
                 attributes={"action_id": action.action_id},
             )
+        checkpoints = None
+        handler_context = current_handler_context()
+        if authorization_handoff is not None and handler_context is not None:
+            checkpoints = _PolicyCheckpoints(
+                self,
+                authorization_handoff,
+                action=action,
+                context=action_context,
+                cause_id=handler_event.event_id if handler_event else None,
+                handler_context=handler_context,
+            )
+        checkpoint_token = _ACTIVE_POLICY_CHECKPOINTS.set(checkpoints)
+        checking_entry = False
         try:
-            if action_context is not None:
-                with execution_scope(
-                    action_context,
-                    handler_event.event_id if handler_event else trace_cause,
-                ):
-                    result = handler(deepcopy(approved_payload))
-            else:
-                result = handler(deepcopy(approved_payload))
+            scope = execution_scope(
+                action_context, handler_event.event_id if handler_event else trace_cause,
+            ) if action_context is not None else nullcontext()
+            with scope:
+                payload = _copy_action_payload(approved_payload)
+                if authorization_handoff is not None:
+                    # Logging, start exporters and payload copying have now returned.
+                    checking_entry = True
+                    self._confirm_authorization_handoff(
+                        authorization_handoff, action=action, context=action_context,
+                        authorized_event=handler_event, blocked_kind="handler.entry_blocked",
+                    )
+                    checking_entry = False
+                result = handler(payload)
         except (SETTCancelledError, SETTTimeoutError) as error:
-            # A handler that stopped because it was cancelled, or because
-            # it ran out of time, did not fail. Both are reachable from a
-            # handler today: HandlerContext.throw_if_cancelled() and the
-            # adapters' own checkpoints raise exactly these, and folding
-            # them into handler.failed would report the distinction this
-            # version exists to draw as though it did not exist.
+            # Cancellation and timeout raised by handler or adapter checkpoints
+            # must retain their own outcomes rather than becoming handler.failed.
             if action_context is not None and self._trace_recorder is not None:
                 cancelled = isinstance(error, SETTCancelledError)
                 stopped_event = self._trace_recorder.record(
@@ -862,6 +1146,11 @@ class SETTExecutor:
                     pass
             raise
         except Exception as error:
+            if checking_entry and isinstance(error, SETTAuthorizationError):
+                # The gate already recorded handler.entry_blocked against the start.
+                raise
+            if checkpoints is not None and checkpoints.failed:
+                _mark_blocked_segment(error)
             if action_context is not None and self._trace_recorder is not None:
                 failed_event = self._trace_recorder.record(
                     action_context,
@@ -880,6 +1169,10 @@ class SETTExecutor:
                 except (AttributeError, TypeError):
                     pass
             raise
+        finally:
+            _ACTIVE_POLICY_CHECKPOINTS.reset(checkpoint_token)
+        if checkpoints is not None:
+            checkpoints.record_missed()
 
         append_chained_entry(self._audit_log, {
             "action_type": action.action_type,
@@ -1025,11 +1318,22 @@ class SETTExecutor:
             # quietly lose cancellability.
             parent_context = parent_control.context
         trace_cause = cause_id or current_trace_cause_id()
-        submission_context = (
-            parent_context.derive()
-            if parent_context is not None
-            else ExecutionContext.create()
-        )
+        if (
+            parent_context is not None
+            and parent_context.parent_id is None
+            and parent_control is None
+            and self._trace_recorder is not None
+            and self._trace_recorder.last_event_id(parent_context.run_id) is None
+        ):
+            # A caller-supplied root is already a valid root; deriving here
+            # would create a child whose parent has no recorded event.
+            submission_context = parent_context
+        else:
+            submission_context = (
+                parent_context.derive()
+                if parent_context is not None
+                else ExecutionContext.create()
+            )
         # An explicit timeout_seconds always wins. Otherwise, fall back to
         # the LifecyclePolicy's per-action_type handler timeout, resolved
         # by the orchestrator this executor is registered with, following the same
@@ -1130,13 +1434,8 @@ class SETTExecutor:
             outcome = self._submission_failure(
                 error, control=control, trace_id=trace_id
             )
-        # M-01 fix: every state built above was constructed from inside
-        # `with control`, before control.__exit__() ever ran run_cleanup().
-        # control.cleanup_errors was necessarily empty at that point
-        # regardless of what actually happened, so a cleanup hook that
-        # failed while unwinding this submission was silently dropped from
-        # the result. `with control` has now exited - cleanup has settled -
-        # so the outcome is re-stamped with what really happened.
+        # Cleanup runs when the control context exits. Attach its settled errors
+        # to the outcome only after leaving that context.
         if outcome.state.cleanup_errors != control.cleanup_errors:
             outcome = replace(
                 outcome,
@@ -1163,14 +1462,15 @@ class SETTExecutor:
         """Run the attempt loop for one action inside its control."""
         trace_id = submission_context.trace_id
         key = action.idempotency_key
-        # The controlled path takes its snapshot here, one level above
-        # submit(), so the fingerprint and every attempt below describe
-        # the same payload. Fingerprinting the caller's live Action and
-        # then letting submit() read it again left the two able to
-        # disagree: the key would be reserved against one payload while a
-        # different one was performed under it, which is the idempotency
-        # half of the same read-it-once problem.
-        action = replace(action, payload=deepcopy(action.payload))
+        # Snapshot before fingerprinting so the reservation and every attempt
+        # describe the same payload, even if the caller mutates the Action.
+        try:
+            action = replace(action, payload=_copy_action_payload(action.payload))
+        except SETTValidationError as error:
+            return self._submission_failure(
+                error, control=control, trace_id=trace_id,
+                reason_code="action.payload_too_deep",
+            )
         fingerprint = action_fingerprint(action) if key else None
         last_error: BaseException | None = None
         attempts_made = 0
@@ -1234,22 +1534,9 @@ class SETTExecutor:
                 )
 
             attempts_made = attempt_number
-            # M-02 (defensive audit #3): the loop variable above counts
-            # attempts within THIS call to submit_controlled() only, and
-            # resets to 1 every time a caller resubmits the same action
-            # after a retryable failure, which is exactly the case an
-            # idempotency_key exists to identify as the same operation.
-            # A caller retried [1, 1] where the store's own record already
-            # said attempt_count=2: the number handed to the log and to
-            # the handler was silently wrong the moment a retry crossed a
-            # submission boundary. The store already keeps the
-            # authoritative count for the key (bumped by reserve() on
-            # every successful reservation, including this one), so this
-            # reuses that instead of inventing a second field, following the same
-            # "one source of truth" shape as validate_duration_seconds()
-            # and the H-02 single-read fix. Without a key there is no
-            # cross-submission identity to be authoritative about, so the
-            # local count is the honest answer in that case.
+            # For an idempotency key, the store's count includes earlier submissions;
+            # the loop counter covers only this call. Use the store's count when
+            # available, and the local count when there is no cross-submission key.
             operation_attempt_number = (
                 reservation.record.attempt_count
                 if key is not None
@@ -1285,13 +1572,13 @@ class SETTExecutor:
                 cancellation_token=control.token,
                 timeout_seconds=control.remaining_seconds(),
             )
-            token = _ACTIVE_HANDLER_CONTEXT.set(handler_context)
             try:
-                result = self.submit(
+                result = self._submit_in_handler_context(
+                    handler_context,
                     action,
-                    emotional_state=emotional_state,
-                    risk_profile=risk_profile,
-                    location_id=location_id,
+                    emotional_state,
+                    risk_profile,
+                    location_id,
                     execution_context=submission_context,
                     cause_id=(
                         attempt_event.event_id if attempt_event else trace_cause
@@ -1302,12 +1589,15 @@ class SETTExecutor:
                 # Not a stopped or failed attempt: the process itself is
                 # being interrupted or torn down. Retrying, or reporting
                 # this as a structured ExecutionResult, would misrepresent
-                # what actually happened. `finally` below still runs.
+                # what actually happened. The submission has already
+                # restored the previous handler context.
                 raise
             except BaseException as error:  # noqa: BLE001
                 last_error = error
                 classification = classify_error(error, policy)
-                retryable = is_retryable(error, policy)
+                # A segment already ran when a checkpoint failed: never repeat it.
+                blocked_segment = getattr(error, "_sett_checkpoint_blocked", False) is True
+                retryable = False if blocked_segment else is_retryable(error, policy)
                 self._record_attempt_event(
                     submission_context,
                     "handler.attempt_failed",
@@ -1320,6 +1610,8 @@ class SETTExecutor:
                     reason_codes=(
                         "action.outcome_unknown"
                         if classification is ErrorClass.AMBIGUOUS
+                        else error.reason_code
+                        if isinstance(error, SETTAuthorizationError)
                         else "component.exception",
                     ),
                     error_type=type(error).__name__,
@@ -1344,8 +1636,21 @@ class SETTExecutor:
                             else None
                         ),
                         attempt_count=attempt_number,
+                        partial=blocked_segment,
                     )
-                backoff = policy.backoff_for(attempt_number)
+                backoff = retry_delay_seconds(error, policy, attempt_number)
+                if backoff is None:
+                    # The provider asked for a longer pause than the policy
+                    # allows. Waiting that long would exceed the budget the
+                    # application adopted, and retrying sooner would ignore
+                    # the provider, so the submission ends here.
+                    return self._submission_failure(
+                        error,
+                        control=control,
+                        trace_id=trace_id,
+                        reason_code="retry.provider_delay_exceeded",
+                        attempt_count=attempt_number,
+                    )
                 if backoff:
                     remaining = control.remaining_seconds()
                     if remaining is not None and remaining <= backoff:
@@ -1368,8 +1673,6 @@ class SETTExecutor:
                             attempt_count=attempt_number,
                         )
                 continue
-            finally:
-                _ACTIVE_HANDLER_CONTEXT.reset(token)
 
             digest = result_digest(result)
             self._record_attempt_event(
@@ -1434,8 +1737,13 @@ class SETTExecutor:
         trace_id: str,
         reason_code: str | None = None,
         attempt_count: int = 1,
+        partial: bool = False,
     ) -> ExecutionResult[Any]:
-        """Wrap a terminating error, keeping the four stop reasons apart."""
+        """Wrap a terminating error, keeping the four stop reasons apart.
+
+        ``partial`` reports a handler stopped at a failed controlled
+        checkpoint after an earlier segment ran.
+        """
         if isinstance(error, SETTCancelledError):
             status = ExecutionStatus.CANCELLED
             code = reason_code or (error.reason or "execution.cancelled")
@@ -1445,6 +1753,16 @@ class SETTExecutor:
         elif isinstance(error, SETTEthicalFilterRejectedError):
             status = ExecutionStatus.REJECTED
             code = reason_code or "policy.reject"
+        elif partial:
+            status = ExecutionStatus.PARTIAL
+            code = reason_code or getattr(error, "reason_code", None) or "component.exception"
+        elif isinstance(error, SETTAuthorizationError):
+            status = (
+                ExecutionStatus.REJECTED
+                if error.verdict == "deny"
+                else ExecutionStatus.FAILED
+            )
+            code = reason_code or error.reason_code
         else:
             status = ExecutionStatus.FAILED
             code = reason_code or "component.exception"

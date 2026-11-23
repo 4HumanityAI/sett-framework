@@ -1,8 +1,7 @@
 # Adapter contract and resilience design
 
 Status: current framework contract  
-Introduced: SETT Framework v0.13.0  
-Last reviewed: SETT Framework v0.13.2
+Introduced: SETT Framework v0.13.0
 
 This is the canonical, living design document for SETT adapters. Future
 releases update this file in place; Git history and the changelog preserve the
@@ -185,11 +184,17 @@ probe is a new OPEN transition and starts a fresh timeout.
 Resilience is opt-in:
 
 - no retry occurs without a `RetryPolicy`;
+- an adapter marking its error `retryable` is not permission: the error type
+  must be listed in the policy's `retry_on`;
 - retry also requires `operation_is_idempotent=True`;
+- the Anthropic and OpenAI clients are built with SDK retries disabled, so
+  the SDK does not repeat a request on its own;
 - cancellation, validation, configuration, authentication, ethical rejection,
   and idempotency conflict never become retry permission;
 - provider timeouts remain ambiguous and are not automatically retried;
-- `Retry-After` never extends the caller's remaining deadline;
+- `Retry-After` never extends the caller's remaining deadline or the
+  policy's `max_backoff_seconds`; a longer request ends the call without a
+  retry;
 - circuit state is neither global nor persisted across restarts.
 
 ## 11. Contract kit

@@ -6,7 +6,7 @@ hybrid risk evaluation:
 
   Layer 1: Action harm score (ContextAnalyzer keyword heuristics)
   Layer 2: User state (RiskProfile three pillars)
-  Layer 3: Environmental context (RiskLevel 0–5)
+  Layer 3: Environmental context (RiskLevel 0 to 5)
 
 Every action and every UniversalMemory write passes through here.
 The filter always prioritizes human protection.
@@ -107,10 +107,10 @@ class EthicalFilter:
 
         Raises:
             SETTValidationError: If action_type is empty/whitespace, or
-                analyzer is not a ContextAnalyzer (F21, defensive audit
-                #2: previously unvalidated).
+                analyzer is not a ContextAnalyzer (previously
+                unvalidated).
             SETTConfigurationError: If action_type already has an
-                analyzer registered (F05, defensive audit #2). Call
+                analyzer registered. Call
                 unregister_analyzer() first to replace one deliberately -
                 the same "explicit swap, not implicit overwrite" contract
                 SETTExecutor's handler registration now has.
@@ -194,10 +194,8 @@ class EthicalFilter:
         Raises:
             SETTEthicalFilterRejectedError: If the action is blocked.
         """
-        # Full three-layer analysis: uses the analyzer registered for
-        # this specific action_type if one exists, otherwise the
-        # generic analyzer (same behavior as before register_analyzer
-        # existed).
+        # Use the analyzer registered for this action_type, falling back to
+        # the generic analyzer when none is registered.
         analysis = self._analyzer_for(action).analyze(
             action=action,
             context=context,
@@ -244,7 +242,6 @@ class EthicalFilter:
                 "human_at_risk_without_protective_classification"
             )
 
-        # Log the decision
         self._log(
             action, score, verdict, analysis,
             effective_reject, effective_warn, env_modifier,
@@ -285,7 +282,6 @@ class EthicalFilter:
                 },
             )
 
-        # Act on verdict
         if verdict == FilterVerdict.WARN:
             logger.warning(
                 "[EthicalFilter] WARN | action='%s' score=%.2f "

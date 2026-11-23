@@ -137,7 +137,7 @@ def test_lifecycle_kwargs_carries_the_run_state_into_an_adapter_call(registry):
     assert forwarded["timeout"] <= 30.0
 
 
-# ── H-02: LifecyclePolicy.adapter_timeout(), opted into by name ────────────
+# ── LifecyclePolicy.adapter_timeout(), opted into by name ──────────────────
 
 
 def test_lifecycle_kwargs_ignores_adapter_timeout_without_a_name(registry):
@@ -155,7 +155,7 @@ def test_lifecycle_kwargs_ignores_adapter_timeout_without_a_name(registry):
 
 
 def test_lifecycle_kwargs_applies_the_named_adapter_timeout(registry):
-    """H-02 regression: an Expert naming its adapter gets the policy value.
+    """Regression: an Expert naming its adapter gets the policy value.
 
     Before this fix, ``LifecyclePolicy.adapter_timeout()`` was resolvable
     but had no path to reach an adapter call at all; there was no ambient
@@ -281,7 +281,7 @@ def test_ollama_uses_the_run_deadline_instead_of_its_own(monkeypatch, registry):
         def __exit__(self, *args):
             return False
 
-        def read(self):
+        def read(self, size=-1):
             return b'{"response": "hi"}'
 
     def fake_urlopen(request, timeout=None):
@@ -289,9 +289,9 @@ def test_ollama_uses_the_run_deadline_instead_of_its_own(monkeypatch, registry):
         return FakeResponse()
 
     monkeypatch.setattr(
-        ollama_module.urllib.request, "urlopen", fake_urlopen
+        ollama_module, "_open_request", fake_urlopen
     )
-    adapter = ollama_module.OllamaAdapter(timeout_seconds=30)
+    adapter = ollama_module.OllamaAdapter(timeout_seconds=30, model="test-model")
 
     with _control(registry, timeout_seconds=1.5) as control, lifecycle_scope(control):
         assert adapter.complete("hello") == "hi"
@@ -312,15 +312,15 @@ def test_ollama_keeps_its_own_timeout_when_no_run_is_shorter(monkeypatch):
         def __exit__(self, *args):
             return False
 
-        def read(self):
+        def read(self, size=-1):
             return b'{"response": "hi"}'
 
     monkeypatch.setattr(
-        ollama_module.urllib.request,
-        "urlopen",
+        ollama_module,
+        "_open_request",
         lambda request, timeout=None: (seen.append(timeout), FakeResponse())[1],
     )
-    adapter = ollama_module.OllamaAdapter(timeout_seconds=30)
+    adapter = ollama_module.OllamaAdapter(timeout_seconds=30, model="test-model")
     adapter.complete("hello")
 
     assert seen == [30]
@@ -331,11 +331,11 @@ def test_ollama_does_not_call_out_at_all_once_cancelled(monkeypatch, registry):
 
     called: list[int] = []
     monkeypatch.setattr(
-        ollama_module.urllib.request,
-        "urlopen",
+        ollama_module,
+        "_open_request",
         lambda *args, **kwargs: called.append(1),
     )
-    adapter = ollama_module.OllamaAdapter()
+    adapter = ollama_module.OllamaAdapter(model="test-model")
 
     with _control(registry) as control, lifecycle_scope(control):
         control.cancel()
@@ -352,9 +352,9 @@ def test_a_provider_timeout_still_surfaces_as_an_adapter_error(monkeypatch):
         raise TimeoutError("too slow")
 
     monkeypatch.setattr(
-        ollama_module.urllib.request, "urlopen", always_times_out
+        ollama_module, "_open_request", always_times_out
     )
-    adapter = ollama_module.OllamaAdapter(timeout_seconds=5)
+    adapter = ollama_module.OllamaAdapter(timeout_seconds=5, model="test-model")
 
     with pytest.raises(SETTLLMAdapterError, match="did not respond"):
         adapter.complete("hello")

@@ -1,28 +1,13 @@
 """
-SETT Framework: Ollama (local) Adapter
-==============================
-LLM adapter for locally-running models via Ollama (https://ollama.com).
+SETT Framework: Ollama Adapter
+=============================
+LLM adapter for an application-configured Ollama server, using Python's
+standard library. No optional Python SDK is required.
 
-No API key, no cloud, no cost: the model runs entirely on your own
-machine. Requires ONLY that Ollama itself be installed and running
-(`ollama serve`, usually started automatically) with at least one model
-pulled (e.g. `ollama pull qwen3:1.7b`).
-
-Unlike AnthropicAdapter/OpenAIAdapter/GeminiAdapter, this adapter has
-NO extra pip dependency at all: it talks to Ollama's local REST API
-using only Python's standard library (urllib). If you can run
-`ollama pull <model>` and `ollama serve`, this adapter works with
-nothing else to install on the Python side.
-
-Recommended low-resource models (verified good picks as of 2026 for
-machines without a dedicated GPU):
-    - qwen3:1.7b    : lightest, ~4GB RAM, strong multilingual support
-    - phi4-mini     : 3.8B, MIT license, built for CPU-only machines
-
-Implements the LLMBase interface: fully interchangeable with the
-cloud adapters. This is what makes SETT's principle 4 ("LLM as engine,
-not architecture") concrete: swapping AnthropicAdapter for
-OllamaAdapter changes zero lines anywhere else in your system.
+Install Ollama and pull the model chosen by the application before use.
+The default endpoint is localhost; a custom URL can select a remote server.
+Model availability, resource requirements and access to that server are
+the application's responsibility.
 """
 from __future__ import annotations
 
@@ -39,6 +24,8 @@ from sett.core_ruler.adapter import (
     CapabilitySupport,
     ConnectivityRequirement,
     adapter_call_scope,
+    normalized_adapter_error,
+    required_model,
 )
 from sett.core_ruler.lifecycle import (
     pop_lifecycle_kwargs,
@@ -46,6 +33,16 @@ from sett.core_ruler.lifecycle import (
 )
 from sett.exceptions import SETTError, SETTLLMAdapterError
 from sett.services_llm.base import LLMBase
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _open_request(request, *, timeout):
+    """Use a per-call opener without changing process-global HTTP behavior."""
+    return urllib.request.build_opener(_NoRedirect()).open(request, timeout=timeout)
 
 
 def _validated_base_url(base_url: str) -> str:
@@ -83,17 +80,24 @@ def _validated_base_url(base_url: str) -> str:
         # urllib reports these as plain ValueError: 'Invalid IPv6 URL',
         # 'Port could not be cast to integer value'.
         raise SETTLLMAdapterError(
-            f"Ollama base_url {base_url!r} is not a valid URL: {e}",
+            "Ollama base_url is not a valid URL.",
             kind=AdapterErrorKind.CONFIGURATION,
             provider="ollama",
             adapter_name="OllamaAdapter",
             reason_code="adapter.invalid_base_url",
         ) from e
 
-    if parts.scheme not in ("http", "https") or not parts.netloc:
+    if (
+        parts.scheme not in ("http", "https")
+        or not parts.hostname
+        or parts.username is not None
+        or parts.password is not None
+        or parts.query
+        or parts.fragment
+    ):
         raise SETTLLMAdapterError(
-            f"Ollama base_url {base_url!r} must be an absolute http(s) URL "
-            f"including the host, for example "
+            "Ollama base_url must be an absolute http(s) URL "
+            "without credentials, query or fragment, for example "
             f"'{OllamaAdapter.DEFAULT_BASE_URL}'.",
             kind=AdapterErrorKind.CONFIGURATION,
             provider="ollama",
@@ -105,17 +109,18 @@ def _validated_base_url(base_url: str) -> str:
 
 class OllamaAdapter(LLMBase):
     """
-    LLM adapter for locally-running Ollama models. No API key, no cost.
+    LLM adapter for an explicitly selected Ollama model and server.
 
     Usage:
+        import os
         from sett.services_llm.ollama import OllamaAdapter
 
-        llm = OllamaAdapter(model="qwen3:1.7b")
+        llm = OllamaAdapter(model=os.environ["SETT_LLM_MODEL"])
         response = llm.complete("What is SETT?")
 
     Before first use:
         1. Install Ollama: https://ollama.com/download
-        2. Pull a model:   ollama pull qwen3:1.7b
+        2. Pull the model selected in SETT_LLM_MODEL with ollama pull.
         3. Make sure Ollama is running (it usually starts automatically
            as a background service after installation).
 
@@ -125,17 +130,18 @@ class OllamaAdapter(LLMBase):
             ``chat()`` for every way the request itself can fail.
     """
 
-    DEFAULT_MODEL = "qwen3:1.7b"
     DEFAULT_BASE_URL = "http://localhost:11434"
     DEFAULT_TEMPERATURE = 0.75
     DEFAULT_TIMEOUT_SECONDS = 30
 
     def __init__(
         self,
-        model: str = DEFAULT_MODEL,
+        model: str | None = None,
         base_url: str = DEFAULT_BASE_URL,
         temperature: float = DEFAULT_TEMPERATURE,
         timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+        *,
+        max_response_bytes: int = 16 * 1024 * 1024,
     ) -> None:
         """
         Args:
@@ -150,8 +156,21 @@ class OllamaAdapter(LLMBase):
             timeout_seconds: How long to wait for a response before
                 giving up. Local CPU inference can be slow: raise this
                 if you see timeouts on a low-resource machine.
+            max_response_bytes: Positive response byte limit, 16 MiB by default.
+                Oversized responses and HTTP redirects are rejected. Base URLs
+                must not contain user information, a query or a fragment.
         """
-        self._model = model
+        if type(max_response_bytes) is not int or max_response_bytes <= 0:
+            raise SETTLLMAdapterError(
+                "Ollama max_response_bytes must be a positive integer.",
+                kind=AdapterErrorKind.CONFIGURATION,
+                provider="ollama", reason_code="adapter.configuration_invalid",
+            )
+        self._max_response_bytes = max_response_bytes
+        self._model = required_model(
+            model, error_type=SETTLLMAdapterError, provider="ollama",
+            adapter_name=type(self).__name__,
+        )
         self._base_url = _validated_base_url(base_url)
         self._temperature = min(1.0, max(0.0, temperature))
         self._timeout_seconds = validate_duration_seconds(
@@ -197,7 +216,12 @@ class OllamaAdapter(LLMBase):
                 timeout=lifecycle.effective_timeout(self._timeout_seconds),
             )
             lifecycle.throw_if_cancelled()
-            return data.get("response", "")
+            text = data.get("response", "")
+            if not isinstance(text, str):
+                raise self._invalid_response(
+                    "Ollama returned a response field that is not text."
+                )
+            return text
 
     def chat(
         self,
@@ -227,7 +251,31 @@ class OllamaAdapter(LLMBase):
                 timeout=lifecycle.effective_timeout(self._timeout_seconds),
             )
             lifecycle.throw_if_cancelled()
-            return data.get("message", {}).get("content", "")
+            message = data.get("message", {})
+            content = message.get("content", "") if isinstance(message, dict) else None
+            if not isinstance(content, str):
+                raise self._invalid_response(
+                    "Ollama returned a message whose content is not text."
+                )
+            return content
+
+    def _invalid_response(self, message: str) -> SETTLLMAdapterError:
+        """One shape for every response this adapter cannot use.
+
+        An absent field keeps its established meaning, an empty answer. A
+        field that is present with the wrong type, or a body that is not a
+        JSON object, is a provider response this adapter does not
+        understand, and repeating the same request would not change that.
+        """
+        return SETTLLMAdapterError(
+            message,
+            kind=AdapterErrorKind.INVALID_RESPONSE,
+            provider="ollama",
+            adapter_name=type(self).__name__,
+            operation="request",
+            retryable=False,
+            reason_code="adapter.invalid_response",
+        )
 
     def _post(
         self,
@@ -241,8 +289,9 @@ class OllamaAdapter(LLMBase):
         library: no extra pip dependency required for this adapter.
 
         ``timeout`` is the effective one, namely the shorter of this adapter's
-        own setting and whatever time the surrounding run has left, so a
-        local inference call cannot outlive the turn that asked for it.
+        own setting and whatever time the surrounding run has left. It
+        bounds each socket operation, not the whole call: a server that
+        keeps sending data slowly can hold the call open longer.
 
         Every way this can fail leaves as ``SETTLLMAdapterError``, which
         is the adapter contract callers depend on (``PhrasingExpert``
@@ -265,16 +314,37 @@ class OllamaAdapter(LLMBase):
             request = urllib.request.Request(
                 url, data=body, headers={"Content-Type": "application/json"}
             )
-            with urllib.request.urlopen(request, timeout=effective_timeout) as resp:
-                return json.loads(resp.read().decode("utf-8"))
+            with _open_request(request, timeout=effective_timeout) as resp:
+                response = resp.read(self._max_response_bytes + 1)
+                if len(response) > self._max_response_bytes:
+                    raise self._invalid_response(
+                        "Ollama response exceeds the configured byte limit."
+                    )
+                data = json.loads(response.decode("utf-8"))
+                if not isinstance(data, dict):
+                    raise self._invalid_response(
+                        "Ollama returned JSON that is not an object."
+                    )
+                return data
         except SETTError:
             raise
+        except urllib.error.HTTPError as e:
+            # HTTPError owns a response stream even when no body is read.
+            # Close it on every exit while retaining the original cause.
+            with e:
+                raise normalized_adapter_error(
+                    e,
+                    error_type=SETTLLMAdapterError,
+                    provider="ollama",
+                    adapter_name=type(self).__name__,
+                    operation="request",
+                    status_code=e.code,
+                ) from e
         except urllib.error.URLError as e:
             raise SETTLLMAdapterError(
-                f"Could not reach Ollama at {self._base_url}. "
-                f"Is Ollama installed and running? "
-                f"Try 'ollama serve' or check that the Ollama app is open. "
-                f"Original error: {e}",
+                "Could not reach Ollama. "
+                "Is Ollama installed and running? "
+                "Try 'ollama serve' or check that the Ollama app is open.",
                 kind=AdapterErrorKind.UNAVAILABLE,
                 provider="ollama",
                 adapter_name=type(self).__name__,
@@ -282,7 +352,7 @@ class OllamaAdapter(LLMBase):
                 retryable=True,
                 reason_code="adapter.provider_unavailable",
             ) from e
-        except json.JSONDecodeError as e:
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
             raise SETTLLMAdapterError(
                 "Ollama returned a response that wasn't valid JSON.",
                 kind=AdapterErrorKind.INVALID_RESPONSE,
@@ -307,7 +377,7 @@ class OllamaAdapter(LLMBase):
             ) from e
         except Exception as e:
             raise SETTLLMAdapterError(
-                f"Ollama request to {url} failed.",
+                "Ollama request failed.",
                 kind=AdapterErrorKind.UNKNOWN,
                 provider="ollama",
                 adapter_name=type(self).__name__,

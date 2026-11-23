@@ -327,7 +327,7 @@ def test_a_released_parent_is_retained_while_its_subtree_is_alive(registry):
 
 
 def test_a_retained_run_id_cannot_be_re_registered(registry):
-    """M-04 regression (severe audit).
+    """Regression: a retained run_id cannot be registered again.
 
     A released-but-retained node (kept alive only because its subtree has
     not finished evicting) used to be silently overwritten by a fresh
@@ -440,7 +440,7 @@ def test_a_non_positive_timeout_is_rejected():
 
 
 def test_nan_and_infinite_timeouts_are_rejected():
-    """M-03 regression (severe audit).
+    """Regression: NaN and infinite timeouts are rejected.
 
     NaN is the dangerous one: every comparison against it is False, so
     `expired` (`now >= expires_at`) would never become True and a NaN
@@ -669,7 +669,7 @@ def test_policy_rejects_non_positive_timeouts():
 
 
 def test_policy_rejects_nan_and_infinite_timeouts():
-    """M-03 regression (severe audit), for LifecyclePolicy's own fields."""
+    """Regression, for LifecyclePolicy's own fields: NaN and infinity are rejected."""
     with pytest.raises(SETTValidationError):
         LifecyclePolicy(run_timeout_seconds=float("nan"))
     with pytest.raises(SETTValidationError):

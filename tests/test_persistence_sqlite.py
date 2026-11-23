@@ -241,9 +241,9 @@ def test_sqlite_backend_serializes_concurrent_stream_and_state_writes(
         )
 
 
-# ── M-01: native SQLite failures stay inside the persistence hierarchy ──
+# ── native SQLite failures stay inside the persistence hierarchy ────────
 #
-# Defensive and infrastructure audit of v0.14.0, finding M-01. Opening an
+# Found by the v0.14.0 audit. Opening an
 # unwritable path raised a bare ``sqlite3.OperationalError``, so an
 # application catching ``SETTPersistenceError`` around the framework's own
 # reference backend missed the failure entirely. Each test below states one
@@ -312,7 +312,7 @@ def test_a_failure_after_the_connection_closes_is_normalized_and_attributed(
 def test_normalization_does_not_replace_the_structured_domain_failures(
     tmp_path: Path,
 ) -> None:
-    """M-01 translates infrastructure errors; it must not flatten these."""
+    """Translating infrastructure errors must not flatten these."""
     with _open(tmp_path / "domain.db") as backend:
         head = backend.evidence.head()
         backend.evidence.append(write_id="w-1", payload=b"one", expected_head=head)

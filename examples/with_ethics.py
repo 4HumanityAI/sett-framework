@@ -272,7 +272,7 @@ if __name__ == "__main__":
 
     print(f"\n{'═' * 55}")
     print("  Key takeaway:")
-    print("  Results published to universal memory (Scenarios 1–3) and")
+    print("  Results published to universal memory (Scenarios 1 to 3) and")
     print("  side effects gated via propose_action() (Scenario 4) both")
     print("  pass through the EthicalFilter. Nothing reaches the outside")
     print("  world, or becomes system state, without a verdict.")
